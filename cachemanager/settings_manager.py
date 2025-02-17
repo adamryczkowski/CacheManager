@@ -1,0 +1,179 @@
+# Manages the sqlite instance that holds the settings and properties of the cache
+
+import sqlite3
+from pathlib import Path
+from typing import Optional, Iterator
+from .cache_config import ModelCacheManagerOptions
+from .cache_item import CacheItem
+from entityhash import EntityHash
+
+
+class SettingsManager:
+    """
+    The manager maintains a database of metadata as SQLite database using three tables:
+    # Objects
+    .* hash <primary key>, as 256bit hash
+    .* filename
+    .* compute_cost
+    .* weight
+    # Accesses
+    .* hash <foreign key>
+    .* timestamp <sorted index>
+    # Settings
+    .* key <primary key> - name of the setting of the class
+    .* value
+
+    The database is stored in .metadata.sqlite file stored in the cache directory.
+    """
+
+    managed_directory: Path
+    connection: sqlite3.Connection
+
+    def __init__(self, managed_directory: Path):
+        self.managed_directory = managed_directory
+        self._make_sure_db_exists()
+        self._ensure_tables()
+
+    def _make_sure_db_exists(self):
+        if self.managed_directory.exists():
+            self.connection = sqlite3.connect(
+                self.managed_directory / ".metadata.sqlite"
+            )
+            return
+        self.managed_directory.mkdir(exist_ok=True)
+        self.connection = sqlite3.connect(self.managed_directory / ".metadata.sqlite")
+
+    def __del__(self):
+        self.connection.close()
+
+    def _ensure_tables(self):
+        self.connection.execute("""
+        CREATE TABLE IF NOT EXISTS Objects (
+            hash TEXT PRIMARY KEY,
+            filename TEXT,
+            compute_time REAL,
+            weight REAL
+        )
+        """)
+        self.connection.execute("""
+        CREATE TABLE IF NOT EXISTS Accesses (
+            hash TEXT,
+            timestamp INTEGER,
+            FOREIGN KEY (hash) REFERENCES Objects (hash)
+        )
+        """)
+        # Add index to the timestamp column
+        self.connection.execute(
+            "CREATE INDEX IF NOT EXISTS idx_Accesses_timestamp ON Accesses (timestamp)"
+        )
+        self.connection.execute("""
+        CREATE TABLE IF NOT EXISTS Settings (
+            key TEXT PRIMARY KEY,
+            value TEXT
+        )
+        """)
+        self.connection.commit()
+
+    #
+    # def put_option(self, name: ModelCacheOptionName, value: str):
+    #     self.connection.execute("INSERT INTO Settings (key, value) VALUES (?, ?)", (name.value, value))
+    #     self.connection.commit()
+
+    def _put_settings(self, settings: dict[str, str]):
+        for key, value in settings.items():
+            self.connection.execute(
+                "INSERT INTO Settings (key, value) VALUES (?, ?)", (key, value)
+            )
+        self.connection.commit()
+
+    def _get_settings(self) -> dict[str, str]:
+        cursor = self.connection.execute("SELECT key, value FROM Settings")
+        return dict(cursor.fetchall())
+
+    def put_object(self, object: CacheItem):
+        self.connection.execute(
+            "INSERT INTO Objects (hash, filename, compute_time, weight) VALUES (?, ?, ?, ?)",
+            (
+                object.hash.as_base64,
+                str(object.filename),
+                str(object.compute_time),
+                str(object.weight),
+            ),
+        )
+        self.connection.commit()
+
+    def get_object_compute_time_and_weight(
+        self, hash: EntityHash
+    ) -> Optional[tuple[float, float]]:
+        cursor = self.connection.execute(
+            "SELECT compute_time, weight FROM Objects WHERE hash=?", (hash.as_base64,)
+        )
+        return cursor.fetchone()
+
+    def store_access(self, hash: EntityHash, timestamp: int):
+        self.connection.execute(
+            "INSERT INTO Accesses (hash, timestamp) VALUES (?, ?)",
+            (hash.as_base64, timestamp),
+        )
+        self.connection.commit()
+
+    def get_accesses(self, hash: EntityHash) -> list[int]:
+        cursor = self.connection.execute(
+            "SELECT timestamp FROM Accesses WHERE hash=?", (hash.as_base64,)
+        )
+        return [row[0] for row in cursor.fetchall()]
+
+    def get_last_access(self, hash: EntityHash) -> Optional[int]:
+        cursor = self.connection.execute(
+            "SELECT timestamp FROM Accesses WHERE hash=? ORDER BY timestamp DESC LIMIT 1",
+            (hash.as_base64,),
+        )
+        return cursor.fetchone()
+
+    def remove_object(self, hash: EntityHash):
+        self.connection.execute("DELETE FROM Objects WHERE hash=?", (hash.as_base64,))
+        self.connection.execute("DELETE FROM Accesses WHERE hash=?", (hash.as_base64,))
+        self.connection.commit()
+
+    def get_options(self) -> ModelCacheManagerOptions:
+        settings = self._get_settings()
+        return ModelCacheManagerOptions(
+            cost_of_minute_compute_rel_to_cost_of_1GB=float(
+                settings.get("cost_of_minute_compute_rel_to_cost_of_1GB", 10.0)
+            ),
+            reserved_free_space=float(settings.get("reserved_free_space", 1.0)),
+            half_life_of_cache=float(settings.get("half_life_of_cache", 24.0)),
+            utility_of_1GB_free_space=float(
+                settings.get("utility_of_1GB_free_space", 2.0)
+            ),
+            marginal_relative_utility_at_1GB=float(
+                settings.get("marginal_relative_utility_at_1GB", 1.0)
+            ),
+            cache_dir=self.managed_directory,
+            object_file_extension=settings.get("object_file_extension", ".bin"),
+        )
+
+    def store_options(self, options: ModelCacheManagerOptions):
+        self._put_settings(
+            {
+                "cost_of_minute_compute_rel_to_cost_of_1GB": str(
+                    options.cost_of_minute_compute_rel_to_cost_of_1GB
+                ),
+                "reserved_free_space": str(options.reserved_free_space),
+                "half_life_of_cache": str(options.half_life_of_cache),
+                "utility_of_1GB_free_space": str(options.utility_of_1GB_free_space),
+                "marginal_relative_utility_at_1GB": str(
+                    options.marginal_relative_utility_at_1GB
+                ),
+                "object_file_extension": options.object_file_extension,
+            }
+        )
+
+    def iterate_objects(self) -> Iterator[tuple[EntityHash, Path, float, float]]:
+        cursor = self.connection.execute(
+            "SELECT hash, filename, compute_time, weight FROM Objects"
+        )
+        for hash, filename, compute_time, weight in cursor:
+            hash = EntityHash.FromBase64(hash)
+            filename = Path(filename)
+            yield hash, filename, compute_time, weight

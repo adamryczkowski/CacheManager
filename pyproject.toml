@@ -1,0 +1,19 @@
+[project]
+name = "cachemanager"
+version = "0.1.0"
+description = "Library that manages the cache of the data that is too expensive to compute."
+authors = [
+    {name = "Adam Ryczkowski",email = "adam@statystyka.net"}
+]
+readme = "README.adoc"
+
+[tool.poetry.dependencies]
+python = "^3.12"
+pydantic = "^2.10.0"
+entityhash = {git = "https://github.com/adamryczkowski/EntityHash.git", rev = "master"}
+humanize = "^4.12.0"
+
+
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"
