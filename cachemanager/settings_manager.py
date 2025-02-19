@@ -39,7 +39,6 @@ class SettingsManager:
             self.connection = sqlite3.connect(
                 self.managed_directory / ".metadata.sqlite"
             )
-            return
         self.managed_directory.mkdir(exist_ok=True)
         self.connection = sqlite3.connect(self.managed_directory / ".metadata.sqlite")
 
@@ -52,9 +51,13 @@ class SettingsManager:
             hash TEXT PRIMARY KEY,
             filename TEXT,
             compute_time REAL,
-            weight REAL
+            weight REAL,
+            file_size REAL
         )
         """)
+        self.connection.execute(
+            "CREATE INDEX IF NOT EXISTS idx_filename ON Objects (filename)"
+        )
         self.connection.execute("""
         CREATE TABLE IF NOT EXISTS Accesses (
             hash TEXT,
@@ -66,6 +69,7 @@ class SettingsManager:
         self.connection.execute(
             "CREATE INDEX IF NOT EXISTS idx_Accesses_timestamp ON Accesses (timestamp)"
         )
+
         self.connection.execute("""
         CREATE TABLE IF NOT EXISTS Settings (
             key TEXT PRIMARY KEY,
@@ -92,15 +96,50 @@ class SettingsManager:
 
     def put_object(self, object: CacheItem):
         self.connection.execute(
-            "INSERT INTO Objects (hash, filename, compute_time, weight) VALUES (?, ?, ?, ?)",
+            "INSERT INTO Objects (hash, filename, compute_time, weight, file_size) VALUES (?, ?, ?, ?, ?)",
             (
                 object.hash.as_base64,
-                str(object.filename),
+                str(object.filename.name),
                 str(object.compute_time),
                 str(object.weight),
+                str(object.size),
             ),
         )
         self.connection.commit()
+
+    def get_object_by_hash(self, hash: EntityHash) -> Optional[CacheItem]:
+        cursor = self.connection.execute(
+            "SELECT filename, compute_time, weight FROM Objects WHERE hash=?",
+            (hash.as_base64,),
+        )
+        row = cursor.fetchone()
+        if row is None:
+            return None
+        filename, compute_time, weight = row
+        return CacheItem(
+            hash=hash,
+            filename=Path(filename) / self.managed_directory,
+            compute_time=compute_time,
+            weight=weight,
+        )
+
+    def get_object_by_filename(self, filename: Path) -> Optional[CacheItem]:
+        cursor = self.connection.execute(
+            "SELECT hash, filename, compute_time, weight, file_size FROM Objects WHERE filename=?",
+            (str(filename.name),),
+        )
+        row = cursor.fetchone()
+        if row is None:
+            return None
+        hash, filename, compute_time, weight, file_size = row
+        hash = EntityHash.FromBase64(hash)
+        return CacheItem(
+            hash=hash,
+            filename=Path(filename) / self.managed_directory,
+            compute_time=compute_time,
+            weight=weight,
+            size=file_size,
+        )
 
     def get_object_compute_time_and_weight(
         self, hash: EntityHash
@@ -169,11 +208,23 @@ class SettingsManager:
             }
         )
 
-    def iterate_objects(self) -> Iterator[tuple[EntityHash, Path, float, float]]:
+    def iterate_objects(self) -> Iterator[CacheItem]:
         cursor = self.connection.execute(
-            "SELECT hash, filename, compute_time, weight FROM Objects"
+            "SELECT hash, filename, compute_time, weight, file_size FROM Objects"
         )
-        for hash, filename, compute_time, weight in cursor:
+        for hash, filename, compute_time, weight, file_size in cursor:
             hash = EntityHash.FromBase64(hash)
-            filename = Path(filename)
-            yield hash, filename, compute_time, weight
+            filename = self.managed_directory / Path(filename)
+            ans = CacheItem(
+                hash=hash,
+                filename=filename,
+                compute_time=compute_time,
+                weight=weight,
+                size=file_size,
+            )
+            yield ans
+
+    def clear_objects(self):
+        self.connection.execute("DELETE FROM Objects")
+        self.connection.execute("DELETE FROM Accesses")
+        self.connection.commit()
