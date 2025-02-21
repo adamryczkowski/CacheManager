@@ -72,7 +72,7 @@ class ObjectCache:
             self._impl._settings.filename_prefix,
         )
 
-    def get_object_by_hash(self, obj_hash: EntityHash) -> Optional[bytes]:
+    def get_object_by_hash(self, obj_hash: EntityHash) -> Optional[CacheItem]:
         item = self._impl.get_object_by_hash(obj_hash)
 
         if item is None:
@@ -80,8 +80,7 @@ class ObjectCache:
 
         self._impl.add_access_to_object(obj_hash)
 
-        with open(item.filename, "rb") as f:
-            return f.read()
+        return item
 
     def remove_object(self, obj_hash: EntityHash, remove_access_history: bool = True):
         self._impl.remove_object(
