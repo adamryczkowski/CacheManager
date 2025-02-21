@@ -37,7 +37,7 @@
 ```python
 object_data = b"some data to cache"
 compute_time = 0.5  # in minutes
-item = cache.store_object_unconditionally(object_data, compute_time)
+item = cache.store_object_unconditionally(compute_time)
 print(f"Stored object with utility: {item.utility}")
 ```
 

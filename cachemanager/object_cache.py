@@ -92,19 +92,20 @@ class ObjectCache:
 
     def store_object(
         self,
-        object: bytes,
+        object_path: Path,
         obj_hash: EntityHash,
         compute_time: float,
         weight: float = 1.0,
         object_size: float = None,
         force_store: bool = False,
     ) -> CacheItem:
+        assert object_path.exists()
         exists = self._impl.verify_object(obj_hash)
         item_filename = CacheItem.FilenameFromHash(
             obj_hash, self._impl.cache_dir, self._impl._settings.object_file_extension
         )
         if object_size is None:
-            object_size = len(object) / 1024 / 1024 / 1024
+            object_size = object_path.stat().st_size / (1024 * 1024 * 1024)
         item = CacheItem(
             obj_hash, item_filename, compute_time, weight, size=object_size
         )
@@ -116,7 +117,7 @@ class ObjectCache:
             return item
         else:
             if not exists:
-                self._impl.store_object_unconditionally(object, item)
+                self._impl.store_object_unconditionally(item)
             return item
 
     def calculate_items_utility(

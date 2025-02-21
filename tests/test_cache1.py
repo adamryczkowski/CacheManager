@@ -18,10 +18,15 @@ def test1():
     cache = ObjectCache.MockCache(0.1, Path(__file__).parent, reserved_free_space=0)
     assert cache.free_space == 0.1
     object_size = 0.005
-    obj = int(42).to_bytes()
+    # obj = int(42).to_bytes()
+    obj = Path(__file__)
     item = cache.store_object(
-        obj, obj_hash=calc_hash(obj), compute_time=0.5, object_size=object_size
+        obj,
+        obj_hash=calc_hash(int(42).to_bytes()),
+        compute_time=0.5,
+        object_size=object_size,
     )
+    cache._impl.store_file(obj, None, object_size)
     print(f"util={item.utility}")
     util = cache.calculate_items_utility(item, item_exists=True)
     print(f"util={util}")
@@ -41,8 +46,10 @@ def test2():
         size = np.random.exponential(0.01)
         time = np.random.exponential(0.1)
         object = bytes_array(int(i))
-        item = cache.store_object(object, calc_hash(object), time, object_size=size)
+        obj_path = Path(__file__)
+        item = cache.store_object(obj_path, calc_hash(object), time, object_size=size)
         if item.utility >= 0:
+            cache._impl.store_file(Path(calc_hash(object).as_hex), None, size)
             cache.prune_cache(remove_metadata=True, verbose=True)
         else:
             print(

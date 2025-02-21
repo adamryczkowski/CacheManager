@@ -139,11 +139,6 @@ class ModelCacheManagerImpl:
                 self.calculate_net_utility_of_object(item)
             yield item
 
-    def store_file(self, filename: Path, data: bytes, size: float):
-        # Serialize the object
-        with open(filename, "wb") as f:
-            f.write(data)
-
     def remove_file(self, filename: Path):
         os.remove(filename)
 
@@ -195,7 +190,7 @@ class ModelCacheManagerImpl:
                 )
         return exists_db
 
-    def store_object_unconditionally(self, object: bytes, item: CacheItem):
+    def store_object_unconditionally(self, item: CacheItem):
         """
         Store the object in the cache without questioning its utility.
         """
@@ -210,7 +205,6 @@ class ModelCacheManagerImpl:
         self._metadata_manager.put_object(item)
 
         # Serialize the object
-        self.store_file(item.filename, object, item.size)
         self.add_access_to_object(obj_hash)
 
         return item
