@@ -1,5 +1,6 @@
 # Manages the sqlite instance that holds the settings and properties of the cache
 
+import datetime as dt
 import sqlite3
 from pathlib import Path
 from typing import Optional, Iterator
@@ -96,7 +97,7 @@ class SettingsManager:
         cursor = self.connection.execute("SELECT key, value FROM Settings")
         return dict(cursor.fetchall())
 
-    def put_object(self, object: CacheItem):
+    def put_object(self, object: CacheItem, add_access: bool = True):
         self.connection.execute(
             "INSERT INTO Objects (hash, filename, compute_time, weight, file_size) VALUES (?, ?, ?, ?, ?)",
             (
@@ -107,6 +108,10 @@ class SettingsManager:
                 str(object.size),
             ),
         )
+        if add_access:
+            self.store_access(
+                object.hash, int(dt.datetime.now().timestamp()), commit=False
+            )
         self.connection.commit()
 
     def get_object_by_hash(self, hash: EntityHash) -> Optional[CacheItem]:
@@ -151,12 +156,13 @@ class SettingsManager:
         )
         return cursor.fetchone()
 
-    def store_access(self, hash: EntityHash, timestamp: int):
+    def store_access(self, hash: EntityHash, timestamp: int, commit: bool = True):
         self.connection.execute(
             "INSERT INTO Accesses (hash, timestamp) VALUES (?, ?)",
             (hash.as_base64, timestamp),
         )
-        self.connection.commit()
+        if commit:
+            self.connection.commit()
 
     def get_accesses(self, hash: EntityHash) -> list[int]:
         cursor = self.connection.execute(

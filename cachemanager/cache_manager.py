@@ -194,7 +194,7 @@ class ModelCacheManagerImpl:
                 )
         return exists_db
 
-    def store_object(self, object: bytes, item: CacheItem):
+    def store_object_unconditionally(self, object: bytes, item: CacheItem):
         """
         Store the object in the cache without questioning its utility.
         """
@@ -402,7 +402,7 @@ class ObjectCache:
             return item
         else:
             if not exists:
-                self._impl.store_object(object, item)
+                self._impl.store_object_unconditionally(object, item)
             return item
 
     def calculate_items_utility(
