@@ -98,6 +98,7 @@ class ObjectCache:
         compute_time: float,
         weight: float = 1.0,
         object_size: float = None,
+        force_store: bool = False,
     ) -> CacheItem:
         exists = self._impl.verify_object(obj_hash)
         item_filename = CacheItem.FilenameFromHash(
@@ -110,7 +111,7 @@ class ObjectCache:
         )
 
         self._impl.calculate_net_utility_of_object(item, existing=exists)
-        if item.utility < 0:
+        if item.utility < 0 and not force_store:
             if exists:
                 self._impl.remove_object(obj_hash, remove_access_history=False)
             return item
