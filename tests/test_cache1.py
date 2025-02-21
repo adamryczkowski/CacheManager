@@ -2,6 +2,7 @@ from cachemanager import ObjectCache
 from pathlib import Path
 import os
 from math import isclose
+from entityhash import calc_hash
 
 # from random import seed, random
 import numpy as np
@@ -17,7 +18,10 @@ def test1():
     cache = ObjectCache.MockCache(0.1, Path(__file__).parent, reserved_free_space=0)
     assert cache.free_space == 0.1
     object_size = 0.005
-    item = cache.store_object(int(42).to_bytes(), 0.5, object_size=object_size)
+    obj = int(42).to_bytes()
+    item = cache.store_object(
+        obj, obj_hash=calc_hash(obj), compute_time=0.5, object_size=object_size
+    )
     print(f"util={item.utility}")
     util = cache.calculate_items_utility(item, item_exists=True)
     print(f"util={util}")
@@ -37,9 +41,10 @@ def test2():
         size = np.random.exponential(0.01)
         time = np.random.exponential(0.1)
         object = bytes_array(int(i))
-        item = cache.store_object(object, time, object_size=size)
-        cache.prune_cache(remove_metadata=True, verbose=True)
-        if item.utility < 0:
+        item = cache.store_object(object, calc_hash(object), time, object_size=size)
+        if item.utility >= 0:
+            cache.prune_cache(remove_metadata=True, verbose=True)
+        else:
             print(
                 f"Failed to store object of size {item.pretty_size} and time {item.pretty_compute_time}"
             )

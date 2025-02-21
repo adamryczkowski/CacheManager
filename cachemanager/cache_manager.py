@@ -1,14 +1,17 @@
 from __future__ import annotations
-from humanize import naturalsize
-from .settings_manager import SettingsManager
-from .cache_config import ModelCacheManagerOptions
-from pathlib import Path
-import os
-from typing import Iterator, Optional
-from .cache_item import CacheItem
-import heapq
-from entityhash import EntityHash, calc_hash
+
 import datetime as dt
+import heapq
+import os
+from pathlib import Path
+from typing import Iterator, Optional
+
+from entityhash import EntityHash
+from humanize import naturalsize
+
+from .cache_config import ModelCacheManagerOptions
+from .cache_item import CacheItem
+from .settings_manager import SettingsManager
 
 
 class ModelCacheManagerImpl:
@@ -207,6 +210,7 @@ class ModelCacheManagerImpl:
 
         # Serialize the object
         self.store_file(item.filename, object, item.size)
+        self.add_access_to_object(obj_hash)
 
         return item
 
@@ -225,6 +229,7 @@ class ModelCacheManagerImpl:
         ans = self._metadata_manager.get_object_by_hash(obj_hash)
         if ans is not None:
             if (self._settings.cache_dir / ans.filename).exists():
+                self.add_access_to_object(obj_hash)
                 return ans
 
         return None
@@ -375,12 +380,11 @@ class ObjectCache:
     def store_object(
         self,
         object: bytes,
+        obj_hash: EntityHash,
         compute_time: float,
         weight: float = 1.0,
         object_size: float = None,
     ) -> CacheItem:
-        obj_hash = calc_hash(object)
-
         exists = self._impl.verify_object(obj_hash)
         item_filename = CacheItem.FilenameFromHash(
             obj_hash, self._impl.cache_dir, self._impl._settings.object_file_extension

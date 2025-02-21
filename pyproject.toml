@@ -1,6 +1,6 @@
 [project]
 name = "cachemanager"
-version = "0.9.1"
+version = "0.9.2"
 description = "Library that manages the cache of the data that is too expensive to compute."
 authors = [
     {name = "Adam Ryczkowski",email = "adam@statystyka.net"}

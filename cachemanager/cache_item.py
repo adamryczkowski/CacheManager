@@ -1,9 +1,11 @@
-from pydantic import BaseModel, PositiveFloat
-from pathlib import Path
-from entityhash import EntityHash
-from .pretty_path import shorten_path
-from humanize import naturalsize, naturaldelta
 import datetime as dt
+from pathlib import Path
+
+from entityhash import EntityHash
+from humanize import naturalsize, naturaldelta
+from pydantic import BaseModel, PositiveFloat
+
+from .pretty_path import shorten_path
 
 
 class CacheItem(BaseModel):
@@ -49,7 +51,7 @@ class CacheItem(BaseModel):
     def __str__(self):
         ans = ""
         file_len = len(self.filename.name)
-        ans += f"{shorten_path(self.filename.absolute(), 30+file_len)}:\n"
+        ans += f"{shorten_path(self.filename.absolute(), 30 + file_len)}:\n"
         ans += f" object hash={self.hash}\n"
         ans += f" object size={self.pretty_size}\n"
         ans += f" compute time={self.pretty_compute_time}\n"

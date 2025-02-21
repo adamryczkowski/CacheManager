@@ -3,9 +3,11 @@
 import sqlite3
 from pathlib import Path
 from typing import Optional, Iterator
+
+from entityhash import EntityHash
+
 from .cache_config import ModelCacheManagerOptions
 from .cache_item import CacheItem
-from entityhash import EntityHash
 
 
 class SettingsManager:
