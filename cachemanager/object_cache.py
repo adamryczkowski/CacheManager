@@ -90,22 +90,27 @@ class ObjectCache:
     def prune_cache(self, remove_metadata: bool = False, verbose: bool = False):
         self._impl.prune_cache(remove_metadata=remove_metadata, verbose=verbose)
 
+    def generate_object_filename(self, obj_hash: EntityHash) -> Path:
+        return CacheItem.FilenameFromHash(
+            obj_hash,
+            self._impl.cache_dir,
+            self._impl._settings.object_file_extension,
+            self._impl._settings.filename_prefix,
+        )
+
     def store_object(
         self,
-        object_path: Path,
+        item_filename: Path,
         obj_hash: EntityHash,
         compute_time: float,
         weight: float = 1.0,
         object_size: float = None,
         force_store: bool = False,
     ) -> CacheItem:
-        assert object_path.exists()
+        assert item_filename.exists()
         exists = self._impl.verify_object(obj_hash)
-        item_filename = CacheItem.FilenameFromHash(
-            obj_hash, self._impl.cache_dir, self._impl._settings.object_file_extension
-        )
         if object_size is None:
-            object_size = object_path.stat().st_size / (1024 * 1024 * 1024)
+            object_size = item_filename.stat().st_size / (1024 * 1024 * 1024)
         item = CacheItem(
             obj_hash, item_filename, compute_time, weight, size=object_size
         )
