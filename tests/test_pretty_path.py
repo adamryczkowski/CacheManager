@@ -1,4 +1,4 @@
-from cachemanager import shorten_path
+from CacheManager import shorten_path
 from pathlib import Path
 
 

@@ -1,4 +1,4 @@
-from cachemanager import ObjectCache
+from CacheManager import ObjectCache
 from pathlib import Path
 import os
 from math import isclose

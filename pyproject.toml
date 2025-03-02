@@ -1,11 +1,12 @@
 [project]
-name = "cachemanager"
-version = "0.9.8"
+name = "CacheManager"
+version = "0.10.0"
 description = "Library that manages the cache of the data that is too expensive to compute."
 authors = [
     {name = "Adam Ryczkowski",email = "adam@statystyka.net"}
 ]
 readme = "README.adoc"
+packages = [{ include = "CacheManager"}]
 
 [tool.poetry.dependencies]
 python = "^3.12"
