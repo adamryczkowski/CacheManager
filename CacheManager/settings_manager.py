@@ -5,7 +5,7 @@ import sqlite3
 from pathlib import Path
 from typing import Optional, Iterator
 
-from entityhash import EntityHash
+from EntityHash import EntityHash
 
 from .cache_config import ModelCacheManagerOptions
 from .cache_item import CacheItem
@@ -197,7 +197,6 @@ class SettingsManager:
                 settings.get("marginal_relative_utility_at_1GB", 1.0)
             ),
             cache_dir=self.managed_directory,
-            object_file_extension=settings.get("object_file_extension", ".bin"),
         )
 
     def store_options(self, options: ModelCacheManagerOptions):
@@ -212,7 +211,6 @@ class SettingsManager:
                 "marginal_relative_utility_at_1GB": str(
                     options.marginal_relative_utility_at_1GB
                 ),
-                "object_file_extension": options.object_file_extension,
             }
         )
 

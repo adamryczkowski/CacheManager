@@ -24,13 +24,13 @@
 
  === Initializing the Cache
 
- ```python
- from cachemanager import ObjectCache
- from pathlib import Path
+```python
+from CacheManager import ObjectCache
+from pathlib import Path
 
- # Initialize the cache
- cache = ObjectCache.InitCache(Path("/path/to/cache"))
- ```
+# Initialize the cache
+cache = ObjectCache.InitCache(Path("/path/to/cache"))
+```
 
  === Storing an Object
 
@@ -44,7 +44,7 @@ print(f"Stored object with utility: {item.utility}")
 === Retrieving an Object
 
 ```python
-from entityhash import calc_hash
+from EntityHash import calc_hash
 
 obj_hash = calc_hash(object_data)
 retrieved_data = cache.get_object_by_hash(obj_hash)

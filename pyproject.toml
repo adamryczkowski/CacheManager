@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "CacheManager"
-version = "0.10.2"
+version = "0.11.0"
 description = "Library that manages the cache of the data that is too expensive to compute."
 authors = ["Adam Ryczkowski <adam@statystyka.net>"]
 packages = [{ include = "CacheManager"}]

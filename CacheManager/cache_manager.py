@@ -6,7 +6,7 @@ import os
 from pathlib import Path
 from typing import Iterator, Optional
 
-from entityhash import EntityHash
+import EntityHash
 
 from .cache_config import ModelCacheManagerOptions
 from .cache_item import CacheItem
@@ -55,8 +55,6 @@ class ModelCacheManagerImpl:
         marginal_relative_utility_at_1GB: float = 1.0,
         cost_of_minute_compute_rel_to_cost_of_1GB: float = 0.1,
         reserved_free_space: float = 1.0,
-        object_file_extension: str = "bin",
-        filename_prefix: str = "",
     ):
         self._metadata_manager = SettingsManager(cache_dir)
         self._settings = ModelCacheManagerOptions(
@@ -66,8 +64,6 @@ class ModelCacheManagerImpl:
             marginal_relative_utility_at_1GB=marginal_relative_utility_at_1GB,
             cost_of_minute_compute_rel_to_cost_of_1GB=cost_of_minute_compute_rel_to_cost_of_1GB,
             reserved_free_space=reserved_free_space,
-            object_file_extension=object_file_extension,
-            filename_prefix=filename_prefix,
         )
 
     @property
@@ -176,18 +172,7 @@ class ModelCacheManagerImpl:
         Verify if the object is in the cache and is valid.
         """
         item = self._metadata_manager.get_object_by_hash(object_hash)
-        item_filename = CacheItem.FilenameFromHash(
-            object_hash, self._settings.cache_dir, self._settings.object_file_extension
-        )
         exists_db = item is not None
-        exists_file = item_filename.exists()
-        if exists_db != exists_file:
-            if exists_db:
-                return False  # Does not exist in the file system.
-            else:
-                raise ValueError(
-                    f"Object with hash {object_hash} is in the database but not in the file system. Because there is no metadata associated with it, it has to be removed."
-                )
         return exists_db
 
     def store_object_unconditionally(self, item: CacheItem):
@@ -263,7 +248,6 @@ class MockModelCacheManagerImpl(ModelCacheManagerImpl):
         marginal_relative_utility_at_1GB: float = 1.0,
         cost_of_minute_compute_rel_to_cost_of_1GB: float = 0.1,
         reserved_free_space: float = 1.0,
-        object_file_extension: str = "bin",
     ):
         super().__init__(
             cache_dir=db_directory,
@@ -272,7 +256,6 @@ class MockModelCacheManagerImpl(ModelCacheManagerImpl):
             marginal_relative_utility_at_1GB=marginal_relative_utility_at_1GB,
             cost_of_minute_compute_rel_to_cost_of_1GB=cost_of_minute_compute_rel_to_cost_of_1GB,
             reserved_free_space=reserved_free_space,
-            object_file_extension=object_file_extension,
         )
         self._base_free_space = free_space
         self._files = {}

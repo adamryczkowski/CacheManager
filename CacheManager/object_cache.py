@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Optional, Iterator
 
-from entityhash import EntityHash
+import EntityHash
 from humanize import naturalsize
 
 from .cache_item import CacheItem
@@ -22,7 +22,6 @@ class ObjectCache:
         marginal_relative_utility_at_1GB: float = 1.0,
         cost_of_minute_compute_rel_to_cost_of_1GB: float = 0.1,
         reserved_free_space: float = 1.0,
-        object_file_extension: str = "bin",
     ) -> ObjectCache:
         impl = MockModelCacheManagerImpl(
             free_space=free_space,
@@ -32,7 +31,6 @@ class ObjectCache:
             marginal_relative_utility_at_1GB=marginal_relative_utility_at_1GB,
             cost_of_minute_compute_rel_to_cost_of_1GB=cost_of_minute_compute_rel_to_cost_of_1GB,
             reserved_free_space=reserved_free_space,
-            object_file_extension=object_file_extension,
         )
         return ObjectCache(impl)
 
@@ -64,12 +62,19 @@ class ObjectCache:
     def is_object_in_cache(self, obj_hash: EntityHash) -> bool:
         return self._impl.is_object_in_cache(obj_hash)
 
-    def get_item_filename(self, obj_hash: EntityHash) -> Path:
+    def get_item_filename(
+        self,
+        obj_hash: EntityHash,
+        subfolder: Path,
+        file_prefix: str,
+        file_extension: str,
+    ) -> Path:
         return CacheItem.FilenameFromHash(
             obj_hash,
             self._impl.cache_dir,
-            self._impl._settings.object_file_extension,
-            self._impl._settings.filename_prefix,
+            file_extension=file_extension,
+            subfolder=subfolder,
+            file_prefix=file_prefix,
         )
 
     def get_object_by_hash(self, obj_hash: EntityHash) -> Optional[CacheItem]:
@@ -90,12 +95,19 @@ class ObjectCache:
     def prune_cache(self, remove_metadata: bool = False, verbose: bool = False):
         self._impl.prune_cache(remove_metadata=remove_metadata, verbose=verbose)
 
-    def generate_object_filename(self, obj_hash: EntityHash) -> Path:
+    def generate_object_filename(
+        self,
+        obj_hash: EntityHash,
+        file_extension: str,
+        subfolder: Path,
+        file_prefix: str,
+    ) -> Path:
         return CacheItem.FilenameFromHash(
             obj_hash,
             self._impl.cache_dir,
-            self._impl._settings.object_file_extension,
-            self._impl._settings.filename_prefix,
+            file_extension=file_extension,
+            subfolder=subfolder,
+            file_prefix=file_prefix,
         )
 
     def store_object(

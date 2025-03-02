@@ -2,7 +2,7 @@ from CacheManager import ObjectCache
 from pathlib import Path
 import os
 from math import isclose
-from entityhash import calc_hash
+from EntityHash import calc_hash
 
 # from random import seed, random
 import numpy as np

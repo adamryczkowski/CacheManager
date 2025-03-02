@@ -1,7 +1,7 @@
 import datetime as dt
 from pathlib import Path
 
-from entityhash import EntityHash
+from EntityHash import EntityHash
 from humanize import naturalsize, naturaldelta
 from pydantic import BaseModel, PositiveFloat
 
@@ -19,11 +19,17 @@ class CacheItem(BaseModel):
 
     @staticmethod
     def FilenameFromHash(
-        hash: EntityHash, parent_dir: Path, extension: str, prefix: str = ""
+        hash: EntityHash,
+        parent_dir: Path,
+        file_extension: str,
+        subfolder: Path = None,
+        file_prefix: str = "",
     ):
         filename_length = 10
+        if subfolder is None:
+            subfolder = Path()
         basename = hash.as_base64[:filename_length].replace("/", "_").replace("+", "_")
-        return parent_dir / f"{prefix}{basename}.{extension}"
+        return parent_dir / subfolder / f"{file_prefix}{basename}.{file_extension}"
 
     def __init__(
         self,
