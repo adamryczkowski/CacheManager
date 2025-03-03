@@ -4,14 +4,19 @@ import datetime as dt
 import sqlite3
 from pathlib import Path
 from typing import Optional, Iterator
+from overrides import overrides
 
 from EntityHash import EntityHash
+from .ifaces import (
+    ModelCacheManagerConfig,
+    I_SettingsManager,
+    DC_CacheItem,
+    I_AbstractItemID,
+)
+# from .cache_item import CacheItem
 
-from .cache_config import ModelCacheManagerOptions
-from .cache_item import CacheItem
 
-
-class SettingsManager:
+class SettingsManager[ItemID: (Path, I_AbstractItemID)](I_SettingsManager):
     """
     The manager maintains a database of metadata as SQLite database using three tables:
     # Objects
@@ -29,21 +34,25 @@ class SettingsManager:
     The database is stored in .metadata.sqlite file stored in the cache directory.
     """
 
-    managed_directory: Path
+    database_path: Path
     connection: sqlite3.Connection
 
-    def __init__(self, managed_directory: Path):
-        self.managed_directory = managed_directory
+    def __init__(self, database_path: Path):
+        self.database_path = database_path
         self._make_sure_db_exists()
         self._ensure_tables()
 
     def _make_sure_db_exists(self):
-        if self.managed_directory.exists():
-            self.connection = sqlite3.connect(
-                self.managed_directory / ".metadata.sqlite"
-            )
-        self.managed_directory.mkdir(exist_ok=True)
-        self.connection = sqlite3.connect(self.managed_directory / ".metadata.sqlite")
+        if self.database_path.exists():
+            if self.database_path.is_dir():
+                self.database_path /= ".metadata.sqlite"
+        else:
+            if self.database_path.suffix == "":
+                self.database_path /= ".metadata.sqlite"
+
+            self.database_path.parent.mkdir(exist_ok=True)
+
+        self.connection = sqlite3.connect(self.database_path)
 
     def __del__(self):
         self.connection.close()
@@ -55,7 +64,7 @@ class SettingsManager:
             filename TEXT,
             compute_time REAL,
             weight REAL,
-            file_size REAL
+            filesize REAL
         )
         """)
         self.connection.execute(
@@ -64,7 +73,7 @@ class SettingsManager:
         self.connection.execute("""
         CREATE TABLE IF NOT EXISTS Accesses (
             hash TEXT,
-            timestamp INTEGER,
+            timestamp REAL,
             FOREIGN KEY (hash) REFERENCES Objects (hash)
         )
         """)
@@ -73,118 +82,130 @@ class SettingsManager:
             "CREATE INDEX IF NOT EXISTS idx_Accesses_timestamp ON Accesses (timestamp)"
         )
 
+        # Check if Settings table exists:
+        populate_settings = (
+            self.connection.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='Settings'"
+            ).fetchone()
+            is None
+        )
+
         self.connection.execute("""
         CREATE TABLE IF NOT EXISTS Settings (
             key TEXT PRIMARY KEY,
             value TEXT
         )
         """)
+        if populate_settings:
+            self.store_config(ModelCacheManagerConfig())
         self.connection.commit()
-
-    #
-    # def put_option(self, name: ModelCacheOptionName, value: str):
-    #     self.connection.execute("INSERT INTO Settings (key, value) VALUES (?, ?)", (name.value, value))
-    #     self.connection.commit()
 
     def _put_settings(self, settings: dict[str, str]):
         for key, value in settings.items():
             self.connection.execute(
-                "INSERT INTO Settings (key, value) VALUES (?, ?)", (key, value)
+                "UPDATE Settings SET value = ? WHERE key = ?", (value, key)
             )
-        self.connection.commit()
 
     def _get_settings(self) -> dict[str, str]:
         cursor = self.connection.execute("SELECT key, value FROM Settings")
         return dict(cursor.fetchall())
 
-    def put_object(self, object: CacheItem, add_access: bool = True):
+    @overrides
+    def add_object(self, object: DC_CacheItem):
         self.connection.execute(
-            "INSERT INTO Objects (hash, filename, compute_time, weight, file_size) VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO Objects (hash, filename, compute_time, weight, filesize) VALUES (?, ?, ?, ?, ?)",
             (
                 object.hash.as_base64,
-                str(object.filename.name),
+                str(object.serialized_filename),
                 str(object.compute_time),
                 str(object.weight),
-                str(object.size),
+                str(object.filesize),
             ),
         )
-        if add_access:
-            self.store_access(
-                object.hash, int(dt.datetime.now().timestamp()), commit=False
-            )
-        self.connection.commit()
 
-    def get_object_by_hash(self, hash: EntityHash) -> Optional[CacheItem]:
+    @overrides
+    def get_object_by_hash(self, hash: EntityHash) -> Optional[DC_CacheItem]:
         cursor = self.connection.execute(
-            "SELECT filename, compute_time, weight FROM Objects WHERE hash=?",
+            "SELECT filename, compute_time, weight, filesize FROM Objects WHERE hash=?",
             (hash.as_base64,),
         )
         row = cursor.fetchone()
         if row is None:
             return None
-        filename, compute_time, weight = row
-        return CacheItem(
+        filename, compute_time, weight, filesize = row
+
+        if self.is_ItemID_Path():
+            filename = Path(filename)
+        else:
+            filename = I_AbstractItemID.Unserialize(filename)
+
+        return DC_CacheItem(
             hash=hash,
-            filename=Path(filename) / self.managed_directory,
+            filename=filename,
             compute_time=compute_time,
+            filesize=filesize,
             weight=weight,
         )
 
-    def get_object_by_filename(self, filename: Path) -> Optional[CacheItem]:
+    @overrides
+    def get_object_by_filename(self, filename: ItemID) -> Optional[DC_CacheItem]:
+        if isinstance(filename, Path):
+            filename_str = str(filename)
+        else:
+            filename_str = filename.serialize()
         cursor = self.connection.execute(
-            "SELECT hash, filename, compute_time, weight, file_size FROM Objects WHERE filename=?",
-            (str(filename.name),),
+            "SELECT hash, filename, compute_time, weight, filesize FROM Objects WHERE filename=?",
+            (filename_str,),
         )
         row = cursor.fetchone()
         if row is None:
             return None
-        hash, filename, compute_time, weight, file_size = row
+        hash, filename, compute_time, weight, filesize = row
         hash = EntityHash.FromBase64(hash)
-        return CacheItem(
+        return DC_CacheItem(
             hash=hash,
-            filename=Path(filename) / self.managed_directory,
+            filename=Path(filename) / self.database_path,
             compute_time=compute_time,
             weight=weight,
-            size=file_size,
+            filesize=filesize,
         )
 
-    def get_object_compute_time_and_weight(
-        self, hash: EntityHash
-    ) -> Optional[tuple[float, float]]:
-        cursor = self.connection.execute(
-            "SELECT compute_time, weight FROM Objects WHERE hash=?", (hash.as_base64,)
-        )
-        return cursor.fetchone()
-
-    def store_access(self, hash: EntityHash, timestamp: int, commit: bool = True):
+    @overrides
+    def add_access_to_object(self, objectID: EntityHash, timestamp: dt.datetime):
         self.connection.execute(
             "INSERT INTO Accesses (hash, timestamp) VALUES (?, ?)",
-            (hash.as_base64, timestamp),
+            (objectID.as_base64, timestamp.timestamp()),
         )
-        if commit:
-            self.connection.commit()
 
-    def get_accesses(self, hash: EntityHash) -> list[int]:
+    @overrides
+    def get_accesses(self, hash: EntityHash) -> list[dt.datetime]:
         cursor = self.connection.execute(
             "SELECT timestamp FROM Accesses WHERE hash=?", (hash.as_base64,)
         )
-        return [row[0] for row in cursor.fetchall()]
+        return [dt.datetime.fromtimestamp(row[0]) for row in cursor.fetchall()]
 
-    def get_last_access(self, hash: EntityHash) -> Optional[int]:
+    @overrides
+    def get_last_access(self, hash: EntityHash) -> Optional[dt.datetime]:
         cursor = self.connection.execute(
             "SELECT timestamp FROM Accesses WHERE hash=? ORDER BY timestamp DESC LIMIT 1",
             (hash.as_base64,),
         )
-        return cursor.fetchone()
+        return dt.datetime.fromtimestamp(cursor.fetchone())
 
+    @overrides
     def remove_object(self, hash: EntityHash):
         self.connection.execute("DELETE FROM Objects WHERE hash=?", (hash.as_base64,))
         self.connection.execute("DELETE FROM Accesses WHERE hash=?", (hash.as_base64,))
+
+    @overrides
+    def commit(self):
         self.connection.commit()
 
-    def get_options(self) -> ModelCacheManagerOptions:
+    @property
+    @overrides
+    def config(self) -> ModelCacheManagerConfig:
         settings = self._get_settings()
-        return ModelCacheManagerOptions(
+        return ModelCacheManagerConfig(
             cost_of_minute_compute_rel_to_cost_of_1GB=float(
                 settings.get("cost_of_minute_compute_rel_to_cost_of_1GB", 10.0)
             ),
@@ -196,10 +217,10 @@ class SettingsManager:
             marginal_relative_utility_at_1GB=float(
                 settings.get("marginal_relative_utility_at_1GB", 1.0)
             ),
-            cache_dir=self.managed_directory,
         )
 
-    def store_options(self, options: ModelCacheManagerOptions):
+    @overrides
+    def store_config(self, options: ModelCacheManagerConfig):
         self._put_settings(
             {
                 "cost_of_minute_compute_rel_to_cost_of_1GB": str(
@@ -214,23 +235,24 @@ class SettingsManager:
             }
         )
 
-    def iterate_objects(self) -> Iterator[CacheItem]:
+    @overrides
+    def iterate_cacheitems(self) -> Iterator[DC_CacheItem]:
         cursor = self.connection.execute(
-            "SELECT hash, filename, compute_time, weight, file_size FROM Objects"
+            "SELECT hash, filename, compute_time, weight, filesize FROM Objects"
         )
-        for hash, filename, compute_time, weight, file_size in cursor:
+        for hash, filename, compute_time, weight, filesize in cursor:
             hash = EntityHash.FromBase64(hash)
-            filename = self.managed_directory / Path(filename)
-            ans = CacheItem(
+            filename = self.database_path / Path(filename)
+            ans = DC_CacheItem(
                 hash=hash,
                 filename=filename,
                 compute_time=compute_time,
                 weight=weight,
-                size=file_size,
+                filesize=filesize,
             )
             yield ans
 
-    def clear_objects(self):
+    def clear_cacheitems(self):
         self.connection.execute("DELETE FROM Objects")
         self.connection.execute("DELETE FROM Accesses")
         self.connection.commit()

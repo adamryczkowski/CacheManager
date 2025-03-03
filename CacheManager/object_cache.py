@@ -42,7 +42,6 @@ class ObjectCache:
         marginal_relative_utility_at_1GB: float = 1.0,
         cost_of_minute_compute_rel_to_cost_of_1GB: float = 0.1,
         reserved_free_space: float = 1.0,
-        object_file_extension: str = "bin",
     ) -> ObjectCache:
         impl = ModelCacheManagerImpl(
             cache_dir=cache_dir,
@@ -51,16 +50,16 @@ class ObjectCache:
             marginal_relative_utility_at_1GB=marginal_relative_utility_at_1GB,
             cost_of_minute_compute_rel_to_cost_of_1GB=cost_of_minute_compute_rel_to_cost_of_1GB,
             reserved_free_space=reserved_free_space,
-            object_file_extension=object_file_extension,
         )
         return ObjectCache(impl)
+
+    @property
+    def parent_dir(self) -> Path:
+        return self._impl.cache_dir
 
     def __init__(self, impl: ModelCacheManagerImpl):
         assert isinstance(impl, ModelCacheManagerImpl)
         self._impl = impl
-
-    def is_object_in_cache(self, obj_hash: EntityHash) -> bool:
-        return self._impl.is_object_in_cache(obj_hash)
 
     def get_item_filename(
         self,
@@ -113,29 +112,40 @@ class ObjectCache:
     def store_object(
         self,
         item_filename: Path,
-        obj_hash: EntityHash,
         compute_time: float,
+        obj_hash: EntityHash = None,
         weight: float = 1.0,
         object_size: float = None,
         force_store: bool = False,
     ) -> CacheItem:
         assert item_filename.exists()
-        exists = self._impl.verify_object(obj_hash)
-        if object_size is None:
-            object_size = item_filename.stat().st_size / (1024 * 1024 * 1024)
-        item = CacheItem(
-            obj_hash, item_filename, compute_time, weight, size=object_size
-        )
-
-        self._impl.calculate_net_utility_of_object(item, existing=exists)
-        if item.utility < 0 and not force_store:
-            if exists:
-                self._impl.remove_object(obj_hash, remove_access_history=False)
-            return item
+        check_hash = True
+        if obj_hash is None:
+            obj_hash = EntityHash.EntityHash.FromDiskFile(item_filename, "sha256")
+            check_hash = False
+        item = self._impl.get_object_by_hash(obj_hash)
+        # exists = item is not None
+        if item is None:
+            if object_size is None:
+                object_size = item_filename.stat().st_size / (1024 * 1024 * 1024)
+            item = CacheItem(
+                obj_hash, item_filename, compute_time, weight, size=object_size
+            )
         else:
-            if not exists:
-                self._impl.store_object_unconditionally(item)
-            return item
+            if not check_hash or item.verify_hash():
+                return item
+        self._impl.store_object_unconditionally(item)
+        return item
+
+        # self._impl.calculate_net_utility_of_object(item, existing=exists)
+        # if item.utility < 0 and not force_store:
+        #     if exists:
+        #         self._impl.remove_object(obj_hash, remove_access_history=False)
+        #     return item
+        # else:
+        #     if not exists:
+        #         self._impl.store_object_unconditionally(item)
+        #     return item
 
     def calculate_items_utility(
         self, item: CacheItem, item_exists: bool = None
@@ -156,3 +166,78 @@ class ObjectCache:
     @property
     def cached_objects(self) -> Iterator[CacheItem]:
         return self._impl.iterate_cache_items()
+
+
+class ObjectCacheView:
+    _cache: ObjectCache
+    _subfolder: Path
+    _file_prefix: str
+    _file_extension: str
+
+    def __init__(
+        self,
+        cache: ObjectCache,
+        subfolder: Path = None,
+        file_prefix: str = "",
+        file_extension: str = ".bin",
+    ):
+        assert isinstance(cache, ObjectCache)
+        if subfolder is None:
+            subfolder = Path()
+        self._subfolder = subfolder
+        self._file_prefix = file_prefix
+        self._file_extension = file_extension
+
+    def generate_object_filename(self, obj_hash: EntityHash) -> Path:
+        return self._cache.generate_object_filename(
+            obj_hash,
+            file_extension=self._file_extension,
+            subfolder=self._subfolder,
+            file_prefix=self._file_prefix,
+        )
+
+    def is_object_in_cache(self, obj_hash: EntityHash) -> bool:
+        item = self._cache.get_object_by_hash(obj_hash)
+        is_in_db = item is not None
+        filename = self.generate_object_filename(obj_hash)
+        is_file = filename.exists()
+        if is_file:
+            # Check if size > 0
+            file_size = filename.stat().st_size
+            if file_size == 0:
+                is_file = False
+        if is_in_db and is_file:
+            return True
+        if not is_file:
+            return False
+        if not is_in_db and is_file:
+            raise ResourceWarning(
+                f"File {filename} for some reason is not in the cache database. Possible cache corruption."
+            )
+        return False
+
+    def get_object_by_hash(self, obj_hash: EntityHash) -> Optional[CacheItem]:
+        return self._cache.get_object_by_hash(obj_hash)
+
+    def remove_object(self, obj_hash: EntityHash, remove_access_history: bool = True):
+        return self._cache.remove_object(
+            obj_hash, remove_access_history=remove_access_history
+        )
+
+    def store_object(
+        self,
+        item_filename: Path,
+        compute_time: float,
+        obj_hash: EntityHash = None,
+        weight: float = 1.0,
+        object_size: float = None,
+        force_store: bool = False,
+    ) -> CacheItem:
+        return self._cache.store_object(
+            item_filename, compute_time, obj_hash, weight, object_size, force_store
+        )
+
+    def calculate_items_utility(
+        self, item: CacheItem, item_exists: bool = None
+    ) -> float:
+        return self._cache.calculate_items_utility(item, item_exists=item_exists)

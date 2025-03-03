@@ -59,3 +59,10 @@ else:
 ```python
 cache.prune_cache(verbose=True)
 ```
+
+
+
+== TODO
+
+- [ ] Fix `test_cache1.py`, `test2()`: There must be a nice way to get a `CacheItem` or at least utility before committing the object to disk, because the cache no longer saves files to disk.
+- [ ] Think about if and how the cache is going to manage file save. Probably it should not, and then - what to do with functions like prune.

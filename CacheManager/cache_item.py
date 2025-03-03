@@ -98,3 +98,14 @@ class CacheItem(BaseModel):
         return naturaldelta(
             self.compute_time * 60, months=False, minimum_unit="microseconds"
         )
+
+    @property
+    def exists_on_disk(self) -> bool:
+        return self.filename.exists() and self.filename.stat().st_size > 0
+
+    def verify_hash(self):
+        if not self.exists_on_disk:
+            return False
+        if EntityHash.FromDiskFile(self.filename, "sha256") == self.hash:
+            return True
+        raise ResourceWarning("Hash mismatch")

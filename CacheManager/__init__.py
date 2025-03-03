@@ -1,14 +1,23 @@
 from .pretty_path import shorten_path
-from .settings_manager import SettingsManager
-from .cache_config import ModelCacheManagerOptions, ModelCacheOptionName
-from .cache_item import CacheItem
-from .object_cache import ObjectCache
+from .ifaces import (
+    I_AbstractItemID,
+    DC_CacheItem,
+    I_CacheStorage,
+    I_CacheStorageView,
+    ModelCacheManagerConfig,
+    I_SettingsManager,
+    ModelCacheOptionName,
+)
+from .sqlite_settings_manager import SettingsManager
 
 __all__ = [
     "shorten_path",
-    "SettingsManager",
-    "ModelCacheManagerOptions",
+    "I_AbstractItemID",
+    "DC_CacheItem",
+    "I_CacheStorage",
+    "I_CacheStorageView",
+    "ModelCacheManagerConfig",
+    "I_SettingsManager",
     "ModelCacheOptionName",
-    "CacheItem",
-    "ObjectCache",
+    "SettingsManager",
 ]

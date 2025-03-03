@@ -47,9 +47,16 @@ def test2():
         time = np.random.exponential(0.1)
         object = bytes_array(int(i))
         obj_path = Path(__file__)
-        item = cache.store_object(obj_path, calc_hash(object), time, object_size=size)
+        item = cache.store_object(
+            item_filename=obj_path,
+            obj_hash=calc_hash(object),
+            compute_time=time,
+            object_size=size,
+        )
         if item.utility >= 0:
-            cache._impl.store_file(Path(calc_hash(object).as_hex), None, size)
+            cache._impl.store_file(
+                item_filename=Path(calc_hash(object).as_hex), obj_hash=None
+            )
             cache.prune_cache(remove_metadata=True, verbose=True)
         else:
             print(

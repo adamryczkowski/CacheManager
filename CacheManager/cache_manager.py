@@ -10,7 +10,7 @@ import EntityHash
 
 from .cache_config import ModelCacheManagerOptions
 from .cache_item import CacheItem
-from .settings_manager import SettingsManager
+from .sqlite_settings_manager import SettingsManager
 
 
 class ModelCacheManagerImpl:
@@ -23,7 +23,8 @@ class ModelCacheManagerImpl:
 
     There's an option to set a custom cost multiplier for the task in order to retain the specific cache items for longer or shorter periods of time.
 
-    The class manages a single cache directory.
+    The class does not know about the actual backing storage. All it has is an abstract "filename" concept, which is a unique identifier
+    to the cached entity in the storage (presumably a file path).
 
     Cost of the disk space is computed relatively to the free space on the disk using an exponential decay function with a custom coefficient.
 
@@ -187,18 +188,12 @@ class ModelCacheManagerImpl:
             raise ValueError(f"Object with hash {obj_hash} is already in the cache.")
 
         # Put the object into db
-        self._metadata_manager.put_object(item)
+        self._metadata_manager.add_object(item)
 
         # Serialize the object
         self.add_access_to_object(obj_hash)
 
         return item
-
-    def is_object_in_cache(self, obj_hash: EntityHash) -> bool:
-        item = self._metadata_manager.get_object_by_hash(obj_hash)
-        if item is None:
-            return False
-        return (self._settings.cache_dir / item.filename).exists()
 
     def add_access_to_object(self, obj_hash: EntityHash):
         self._metadata_manager.store_access(
