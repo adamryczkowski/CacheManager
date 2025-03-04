@@ -9,8 +9,8 @@ from typing import Iterator, Optional
 import EntityHash
 
 from .cache_config import ModelCacheManagerOptions
-from .cache_item import CacheItem
-from .sqlite_settings_manager import SettingsManager
+from .cache_item_old import CacheItem
+from .sqlite_settings_manager import SQLitePersistentDB
 
 
 class ModelCacheManagerImpl:
@@ -45,7 +45,7 @@ class ModelCacheManagerImpl:
 
     """
 
-    _metadata_manager: SettingsManager
+    _metadata_manager: SQLitePersistentDB
     _settings: ModelCacheManagerOptions
 
     def __init__(
@@ -57,7 +57,7 @@ class ModelCacheManagerImpl:
         cost_of_minute_compute_rel_to_cost_of_1GB: float = 0.1,
         reserved_free_space: float = 1.0,
     ):
-        self._metadata_manager = SettingsManager(cache_dir)
+        self._metadata_manager = SQLitePersistentDB(cache_dir)
         self._settings = ModelCacheManagerOptions(
             cache_dir=cache_dir,
             half_life_of_cache=half_life_of_cache,
@@ -157,7 +157,7 @@ class ModelCacheManagerImpl:
                 break
             self.remove_file(item.filename)
             if remove_metadata:
-                self._metadata_manager.remove_object(item.hash)
+                self._metadata_manager.remove_item(item.hash)
             if verbose:
                 print(f"Removed object {item} from the cache.")
 
@@ -172,7 +172,7 @@ class ModelCacheManagerImpl:
         """
         Verify if the object is in the cache and is valid.
         """
-        item = self._metadata_manager.get_object_by_hash(object_hash)
+        item = self._metadata_manager.get_item_by_key(object_hash)
         exists_db = item is not None
         return exists_db
 
@@ -188,7 +188,7 @@ class ModelCacheManagerImpl:
             raise ValueError(f"Object with hash {obj_hash} is already in the cache.")
 
         # Put the object into db
-        self._metadata_manager.add_object(item)
+        self._metadata_manager.add_item(item)
 
         # Serialize the object
         self.add_access_to_object(obj_hash)
@@ -201,23 +201,23 @@ class ModelCacheManagerImpl:
         )
 
     def get_object_by_hash(self, obj_hash: EntityHash) -> Optional[CacheItem]:
-        ans = self._metadata_manager.get_object_by_hash(obj_hash)
+        ans = self._metadata_manager.get_item_by_key(obj_hash)
         if ans is not None:
-            if (self._settings.cache_dir / ans.filename).exists():
+            if (self._settings.cache_dir / ans.item_storage_key).exists():
                 self.add_access_to_object(obj_hash)
                 return ans
 
         return None
 
     def remove_object(self, obj_hash: EntityHash, remove_access_history: bool) -> bool:
-        if item := self._metadata_manager.get_object_by_hash(obj_hash) is not None:
-            if self._settings.cache_dir / item.filename.exists():
-                self.remove_file(item.filename)
+        if item := self._metadata_manager.get_item_by_key(obj_hash) is not None:
+            if self._settings.cache_dir / item.item_storage_key.exists():
+                self.remove_file(item.item_storage_key)
                 if remove_access_history:
-                    self._metadata_manager.remove_object(obj_hash)
+                    self._metadata_manager.remove_item(obj_hash)
                 return True
             if remove_access_history:
-                self._metadata_manager.remove_object(obj_hash)
+                self._metadata_manager.remove_item(obj_hash)
             return False
         return False
 

@@ -51,8 +51,9 @@ class ModelCacheManagerConfig(BaseModel):
 class DC_CacheItem[ItemID: (Path, I_AbstractItemID)](
     BaseModel, ABC
 ):  # DC stands for DataClass - a glorified struct
-    hash: EntityHash
-    filename: ItemID  # Path or any other type of item ID in future.
+    item_key: EntityHash  # A key with which it will be acquired from the cache
+    hash: Optional[EntityHash]  # A hash of the item to check for consistency
+    item_storage_key: ItemID  # Path or any other type of item ID in future.
     compute_time: dt.timedelta  # in minutes
     filesize: PositiveFloat  # in GB
     weight: PositiveFloat
@@ -61,12 +62,13 @@ class DC_CacheItem[ItemID: (Path, I_AbstractItemID)](
 
     def __str__(self):
         ans = ""
-        if isinstance(self.filename, Path):
-            file_len = len(self.filename.name)
-            ans += f"{shorten_path(self.filename.absolute(), 30 + file_len)}:\n"
+        if isinstance(self.item_storage_key, Path):
+            file_len = len(self.item_storage_key.name)
+            ans += f"{shorten_path(self.item_storage_key.absolute(), 30 + file_len)}:\n"
         else:
-            ans += f"{self.filename.pretty_shorten(50)}:\n"
-        ans += f" object hash={self.hash}\n"
+            ans += f"storage key={self.item_storage_key.pretty_shorten(50)}:\n"
+        ans += f" item_key={self.item_key}\n"
+        ans += f" hash={self.hash}\n"
         ans += f" object size={self.pretty_size}\n"
         ans += f" compute time={self.pretty_compute_time}\n"
         # ans += f" last accessed {naturaldelta(dt.datetime.now() - self.last_access_time, months=False, minimum_unit="seconds")} ago\n"
@@ -80,10 +82,10 @@ class DC_CacheItem[ItemID: (Path, I_AbstractItemID)](
 
     @property
     def serialized_filename(self) -> str:
-        if isinstance(self.filename, Path):
-            return str(self.filename.absolute())
+        if isinstance(self.item_storage_key, Path):
+            return str(self.item_storage_key.absolute())
         else:
-            return self.filename.serialize()
+            return self.item_storage_key.serialize()
 
     # @property
     # def age(self) -> float:
@@ -100,8 +102,15 @@ class DC_CacheItem[ItemID: (Path, I_AbstractItemID)](
             self.compute_time, months=False, minimum_unit="microseconds"
         )
 
+    def __eq__(self, other: DC_CacheItem[ItemID]) -> bool:
+        ans = self.item_key == other.item_key
+        if __debug__:
+            if self.hash is not None and other.hash is not None:
+                assert (self.hash == other.hash) == ans
+        return ans
 
-class I_SettingsManager[ItemID: (Path, I_AbstractItemID)](ABC):
+
+class I_PersistentDB[ItemID: (Path, I_AbstractItemID)](ABC):
     """Class that abstracts away storage of persistent settings."""
 
     def is_ItemID_Path(self) -> bool:
@@ -111,28 +120,30 @@ class I_SettingsManager[ItemID: (Path, I_AbstractItemID)](ABC):
         return issubclass(self.__orig_class__.__args__[0], Path)
 
     @abstractmethod
-    def add_object(self, object: DC_CacheItem): ...
+    def add_item(self, item: DC_CacheItem): ...
 
     @abstractmethod
-    def add_access_to_object(self, objectID: EntityHash, timestamp: dt.datetime): ...
+    def add_access_to_item(self, item_key: EntityHash, timestamp: dt.datetime): ...
 
     @abstractmethod
     def commit(self): ...
 
     @abstractmethod
-    def get_object_by_hash(self, hash: EntityHash) -> Optional[DC_CacheItem]: ...
+    def get_item_by_key(self, item_key: EntityHash) -> Optional[DC_CacheItem]: ...
 
     @abstractmethod
-    def get_object_by_filename(self, filename: ItemID) -> Optional[DC_CacheItem]: ...
+    def get_item_by_storage_key(
+        self, storage_key: ItemID
+    ) -> Optional[DC_CacheItem]: ...
 
     @abstractmethod
-    def get_accesses(self, hash: EntityHash) -> list[dt.datetime]: ...
+    def get_accesses(self, item_key: EntityHash) -> list[dt.datetime]: ...
 
     @abstractmethod
-    def get_last_access(self, hash: EntityHash) -> Optional[dt.datetime]: ...
+    def get_last_access(self, item_key: EntityHash) -> Optional[dt.datetime]: ...
 
     @abstractmethod
-    def remove_object(self, hash: EntityHash): ...
+    def remove_item(self, item_key: EntityHash, remove_history: bool = True): ...
 
     @property
     @abstractmethod
@@ -142,13 +153,13 @@ class I_SettingsManager[ItemID: (Path, I_AbstractItemID)](ABC):
     def store_config(self, options: ModelCacheManagerConfig): ...
 
     @abstractmethod
-    def iterate_cacheitems(self) -> Iterator[DC_CacheItem]: ...
+    def iterate_items(self) -> Iterator[DC_CacheItem]: ...
 
     @abstractmethod
-    def clear_cacheitems(self): ...
+    def clear_items(self): ...
 
 
-class I_CacheStorage[ItemID: (Path, I_AbstractItemID)](ABC):
+class I_CacheStorageRead[ItemID: (Path, I_AbstractItemID)](ABC):
     @property
     @abstractmethod
     def free_space(self) -> float: ...
@@ -158,13 +169,40 @@ class I_CacheStorage[ItemID: (Path, I_AbstractItemID)](ABC):
     def storage_id(self) -> str: ...
 
     @abstractmethod
-    def get_settings_manager(self) -> I_SettingsManager[ItemID]: ...
+    def calculate_hash(self, item_storage_key: ItemID) -> Optional[EntityHash]:
+        """None if hash calculation is not possible in principle for the given domain. In such case object verification will always pass.
+        Throw if hash calculation failed for some reason. In this case object verification will fail.
+        """
+        ...
+
+    @abstractmethod
+    def remove_item(self, item_storage_key: ItemID) -> bool:
+        """True if removal succeeded, False otherwise."""
+        ...
+
+    @abstractmethod
+    def does_item_exists(self, item_storage_key: ItemID) -> bool: ...
 
 
-class I_CacheStorageView[ItemID: (Path, I_AbstractItemID)](ABC):
+class I_CacheStorageModify[ItemID: (Path, I_AbstractItemID)](
+    I_CacheStorageRead[ItemID]
+):
+    @abstractmethod
+    def remove_item(self, item_storage_key: ItemID) -> bool:
+        """True if removal succeeded, False otherwise."""
+        ...
+
+    @abstractmethod
+    def load_item(self, item_storage_key: ItemID) -> bytes: ...
+
+    @abstractmethod
+    def save_item(self, object: bytes, item_storage_key: ItemID): ...
+
+
+class I_StorageKeyGenerator[ItemID: (Path, I_AbstractItemID)](ABC):
     """
     Class that is responsible for naming new cache items.
     """
 
     @abstractmethod
-    def generate_object_filename(self, obj_hash: EntityHash) -> ItemID: ...
+    def generate_item_storage_key(self, item_key: EntityHash) -> ItemID: ...

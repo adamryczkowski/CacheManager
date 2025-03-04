@@ -37,7 +37,7 @@ cache = ObjectCache.InitCache(Path("/path/to/cache"))
 ```python
 object_data = b"some data to cache"
 compute_time = 0.5  # in minutes
-item = cache.store_object_unconditionally(compute_time)
+item = cache.add_item_unconditionally(compute_time)
 print(f"Stored object with utility: {item.utility}")
 ```
 
@@ -47,7 +47,7 @@ print(f"Stored object with utility: {item.utility}")
 from EntityHash import calc_hash
 
 obj_hash = calc_hash(object_data)
-retrieved_data = cache.get_object_by_hash(obj_hash)
+retrieved_data = cache.get_item_by_key(obj_hash)
 if retrieved_data:
     print("Object retrieved from cache")
 else:

@@ -9,14 +9,14 @@ from overrides import overrides
 from EntityHash import EntityHash
 from .ifaces import (
     ModelCacheManagerConfig,
-    I_SettingsManager,
+    I_PersistentDB,
     DC_CacheItem,
     I_AbstractItemID,
 )
 # from .cache_item import CacheItem
 
 
-class SettingsManager[ItemID: (Path, I_AbstractItemID)](I_SettingsManager):
+class SQLitePersistentDB[ItemID: (Path, I_AbstractItemID)](I_PersistentDB):
     """
     The manager maintains a database of metadata as SQLite database using three tables:
     # Objects
@@ -37,10 +37,12 @@ class SettingsManager[ItemID: (Path, I_AbstractItemID)](I_SettingsManager):
     database_path: Path
     connection: sqlite3.Connection
 
-    def __init__(self, database_path: Path):
+    def __init__(
+        self, database_path: Path, initial_config: ModelCacheManagerConfig = None
+    ):
         self.database_path = database_path
         self._make_sure_db_exists()
-        self._ensure_tables()
+        self._ensure_tables(initial_config)
 
     def _make_sure_db_exists(self):
         if self.database_path.exists():
@@ -57,24 +59,28 @@ class SettingsManager[ItemID: (Path, I_AbstractItemID)](I_SettingsManager):
     def __del__(self):
         self.connection.close()
 
-    def _ensure_tables(self):
+    def _ensure_tables(self, initial_config: ModelCacheManagerConfig = None):
         self.connection.execute("""
         CREATE TABLE IF NOT EXISTS Objects (
-            hash TEXT PRIMARY KEY,
-            filename TEXT,
+            item_key TEXT PRIMARY KEY,
+            hash TEXT KEY,
+            item_storage_key TEXT,
             compute_time REAL,
             weight REAL,
             filesize REAL
         )
         """)
         self.connection.execute(
-            "CREATE INDEX IF NOT EXISTS idx_filename ON Objects (filename)"
+            "CREATE INDEX IF NOT EXISTS idx_filename ON Objects (item_storage_key)"
+        )
+        self.connection.execute(
+            "CREATE INDEX IF NOT EXISTS idx_filename ON Objects (hash)"
         )
         self.connection.execute("""
         CREATE TABLE IF NOT EXISTS Accesses (
-            hash TEXT,
+            item_key TEXT,
             timestamp REAL,
-            FOREIGN KEY (hash) REFERENCES Objects (hash)
+            FOREIGN KEY (item_key) REFERENCES Objects (item_key)
         )
         """)
         # Add index to the timestamp column
@@ -90,6 +96,11 @@ class SettingsManager[ItemID: (Path, I_AbstractItemID)](I_SettingsManager):
             is None
         )
 
+        if not populate_settings:
+            populate_settings = (
+                self.connection.execute("SELECT key FROM Settings").fetchone() is None
+            )
+
         self.connection.execute("""
         CREATE TABLE IF NOT EXISTS Settings (
             key TEXT PRIMARY KEY,
@@ -97,7 +108,7 @@ class SettingsManager[ItemID: (Path, I_AbstractItemID)](I_SettingsManager):
         )
         """)
         if populate_settings:
-            self.store_config(ModelCacheManagerConfig())
+            self.store_config(initial_config, table_init=True)
         self.connection.commit()
 
     def _put_settings(self, settings: dict[str, str]):
@@ -106,96 +117,112 @@ class SettingsManager[ItemID: (Path, I_AbstractItemID)](I_SettingsManager):
                 "UPDATE Settings SET value = ? WHERE key = ?", (value, key)
             )
 
+    def _new_settings(self, settings: dict[str, str]):
+        for key, value in settings.items():
+            self.connection.execute(
+                "INSERT INTO Settings (key, value) VALUES (?, ?)", (key, value)
+            )
+
     def _get_settings(self) -> dict[str, str]:
         cursor = self.connection.execute("SELECT key, value FROM Settings")
         return dict(cursor.fetchall())
 
     @overrides
-    def add_object(self, object: DC_CacheItem):
+    def add_item(self, item: DC_CacheItem):
         self.connection.execute(
-            "INSERT INTO Objects (hash, filename, compute_time, weight, filesize) VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO Objects (item_key, item_storage_key, hash, compute_time, weight, filesize) VALUES (?, ?, ?, ?, ?, ?)",
             (
-                object.hash.as_base64,
-                str(object.serialized_filename),
-                str(object.compute_time),
-                str(object.weight),
-                str(object.filesize),
+                item.item_key.as_base64,
+                str(item.serialized_filename),
+                item.hash.as_base64,
+                str(item.compute_time),
+                str(item.weight),
+                str(item.filesize),
             ),
         )
 
     @overrides
-    def get_object_by_hash(self, hash: EntityHash) -> Optional[DC_CacheItem]:
+    def get_item_by_key(self, item_key: EntityHash) -> Optional[DC_CacheItem]:
         cursor = self.connection.execute(
-            "SELECT filename, compute_time, weight, filesize FROM Objects WHERE hash=?",
-            (hash.as_base64,),
+            "SELECT item_storage_key, hash, compute_time, weight, filesize FROM Objects WHERE item_key=?",
+            (item_key.as_base64,),
         )
         row = cursor.fetchone()
         if row is None:
             return None
-        filename, compute_time, weight, filesize = row
+        item_storage_key, hash, compute_time, weight, filesize = row
 
         if self.is_ItemID_Path():
-            filename = Path(filename)
+            item_storage_key = Path(item_storage_key)
         else:
-            filename = I_AbstractItemID.Unserialize(filename)
+            item_storage_key = I_AbstractItemID.Unserialize(item_storage_key)
+        hash = EntityHash.FromBase64(hash)
 
         return DC_CacheItem(
+            item_key=item_key,
+            item_storage_key=item_storage_key,
             hash=hash,
-            filename=filename,
             compute_time=compute_time,
             filesize=filesize,
             weight=weight,
         )
 
     @overrides
-    def get_object_by_filename(self, filename: ItemID) -> Optional[DC_CacheItem]:
-        if isinstance(filename, Path):
-            filename_str = str(filename)
+    def get_item_by_storage_key(self, storage_key: ItemID) -> Optional[DC_CacheItem]:
+        if isinstance(storage_key, Path):
+            filename_str = str(storage_key)
         else:
-            filename_str = filename.serialize()
+            filename_str = storage_key.serialize()
         cursor = self.connection.execute(
-            "SELECT hash, filename, compute_time, weight, filesize FROM Objects WHERE filename=?",
+            "SELECT item_key, item_storage_key, hash,compute_time, weight, filesize FROM Objects WHERE item_storage_key=?",
             (filename_str,),
         )
         row = cursor.fetchone()
         if row is None:
             return None
-        hash, filename, compute_time, weight, filesize = row
+        item_key, item_storage_key, hash, compute_time, weight, filesize = row
         hash = EntityHash.FromBase64(hash)
+        item_key = EntityHash.FromBase64(item_key)
         return DC_CacheItem(
+            item_key=item_key,
+            item_storage_key=Path(storage_key) / self.database_path,
             hash=hash,
-            filename=Path(filename) / self.database_path,
             compute_time=compute_time,
             weight=weight,
             filesize=filesize,
         )
 
     @overrides
-    def add_access_to_object(self, objectID: EntityHash, timestamp: dt.datetime):
+    def add_access_to_item(self, item_key: EntityHash, timestamp: dt.datetime):
         self.connection.execute(
-            "INSERT INTO Accesses (hash, timestamp) VALUES (?, ?)",
-            (objectID.as_base64, timestamp.timestamp()),
+            "INSERT INTO Accesses (item_key, timestamp) VALUES (?, ?)",
+            (item_key.as_base64, timestamp.timestamp()),
         )
 
     @overrides
-    def get_accesses(self, hash: EntityHash) -> list[dt.datetime]:
+    def get_accesses(self, item_key: EntityHash) -> list[dt.datetime]:
         cursor = self.connection.execute(
-            "SELECT timestamp FROM Accesses WHERE hash=?", (hash.as_base64,)
+            "SELECT timestamp FROM Accesses WHERE item_key=?", (item_key.as_base64,)
         )
         return [dt.datetime.fromtimestamp(row[0]) for row in cursor.fetchall()]
 
     @overrides
-    def get_last_access(self, hash: EntityHash) -> Optional[dt.datetime]:
+    def get_last_access(self, item_key: EntityHash) -> Optional[dt.datetime]:
         cursor = self.connection.execute(
-            "SELECT timestamp FROM Accesses WHERE hash=? ORDER BY timestamp DESC LIMIT 1",
-            (hash.as_base64,),
+            "SELECT timestamp FROM Accesses WHERE item_key=? ORDER BY timestamp DESC LIMIT 1",
+            (item_key.as_base64,),
         )
         return dt.datetime.fromtimestamp(cursor.fetchone())
 
     @overrides
-    def remove_object(self, hash: EntityHash):
-        self.connection.execute("DELETE FROM Objects WHERE hash=?", (hash.as_base64,))
-        self.connection.execute("DELETE FROM Accesses WHERE hash=?", (hash.as_base64,))
+    def remove_item(self, item_key: EntityHash, remove_history: bool = True):
+        self.connection.execute(
+            "DELETE FROM Objects WHERE item_key=?", (item_key.as_base64,)
+        )
+        if remove_history:
+            self.connection.execute(
+                "DELETE FROM Accesses WHERE item_key=?", (item_key.as_base64,)
+            )
 
     @overrides
     def commit(self):
@@ -220,39 +247,47 @@ class SettingsManager[ItemID: (Path, I_AbstractItemID)](I_SettingsManager):
         )
 
     @overrides
-    def store_config(self, options: ModelCacheManagerConfig):
-        self._put_settings(
-            {
-                "cost_of_minute_compute_rel_to_cost_of_1GB": str(
-                    options.cost_of_minute_compute_rel_to_cost_of_1GB
-                ),
-                "reserved_free_space": str(options.reserved_free_space),
-                "half_life_of_cache": str(options.half_life_of_cache),
-                "utility_of_1GB_free_space": str(options.utility_of_1GB_free_space),
-                "marginal_relative_utility_at_1GB": str(
-                    options.marginal_relative_utility_at_1GB
-                ),
-            }
-        )
+    def store_config(self, options: ModelCacheManagerConfig, table_init: bool = False):
+        settings_dict = {
+            "cost_of_minute_compute_rel_to_cost_of_1GB": str(
+                options.cost_of_minute_compute_rel_to_cost_of_1GB
+            ),
+            "reserved_free_space": str(options.reserved_free_space),
+            "half_life_of_cache": str(options.half_life_of_cache),
+            "utility_of_1GB_free_space": str(options.utility_of_1GB_free_space),
+            "marginal_relative_utility_at_1GB": str(
+                options.marginal_relative_utility_at_1GB
+            ),
+        }
+        if table_init:
+            self._new_settings(settings_dict)
+        else:
+            self._put_settings(settings_dict)
 
     @overrides
-    def iterate_cacheitems(self) -> Iterator[DC_CacheItem]:
+    def iterate_items(self) -> Iterator[DC_CacheItem]:
         cursor = self.connection.execute(
-            "SELECT hash, filename, compute_time, weight, filesize FROM Objects"
+            "SELECT item_key, item_storage_key, hash, compute_time, weight, filesize FROM Objects"
         )
-        for hash, filename, compute_time, weight, filesize in cursor:
+        for item_key, item_storage_key, hash, compute_time, weight, filesize in cursor:
             hash = EntityHash.FromBase64(hash)
-            filename = self.database_path / Path(filename)
+            item_key = EntityHash.FromBase64(item_key)
+            if self.is_ItemID_Path():
+                item_storage_key = Path(item_storage_key)
+            else:
+                item_storage_key = I_AbstractItemID.Unserialize(item_storage_key)
             ans = DC_CacheItem(
+                item_key=hash,
+                item_storage_key=item_storage_key,
                 hash=hash,
-                filename=filename,
                 compute_time=compute_time,
                 weight=weight,
                 filesize=filesize,
             )
             yield ans
 
-    def clear_cacheitems(self):
+    # noinspection SqlWithoutWhere
+    def clear_items(self):
         self.connection.execute("DELETE FROM Objects")
         self.connection.execute("DELETE FROM Accesses")
         self.connection.commit()
