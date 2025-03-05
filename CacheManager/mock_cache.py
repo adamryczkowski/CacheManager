@@ -1,14 +1,18 @@
-from typing import Optional
-
-from EntityHash import EntityHash
-
-from .ifaces import ModelCacheManagerConfig, I_CacheStorageModify, I_StorageKeyGenerator
-from .object_cache import ObjectCache
-from .abstract_cache_manager import AbstractCacheManager
-from .sqlite_settings_manager import SQLitePersistentDB
+import datetime as dt
 from pathlib import Path
+from time import sleep
+from typing import Optional, Any
+
+import numpy as np
+from EntityHash import EntityHash
+from humanize import naturaldelta, naturalsize
 from overrides import overrides
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter
+
+from .abstract_cache_manager import AbstractCacheManager
+from .ifaces import ModelCacheManagerConfig, I_CacheStorageModify, I_StorageKeyGenerator
+from .object_cache import ObjectCache, I_ItemProducer
+from .sqlite_settings_manager import SQLitePersistentDB
 
 
 class MockObject(BaseModel):
@@ -19,7 +23,7 @@ class MockObject(BaseModel):
         return self.size
 
 
-class MockCacheStorage_Path(I_CacheStorageModify):
+class MockCacheStorage_Path(I_CacheStorageModify[Path]):
     """This mock stores only hashes and fake "lengths" of items. Otherwise, it is fine."""
 
     _stored_objects: dict[Path, MockObject]
@@ -82,6 +86,54 @@ class MockStorageKeyGenerator_Path(BaseModel, I_StorageKeyGenerator[Path]):
 
     def generate_item_storage_key(self, item_key: EntityHash) -> Path:
         return self.prefix / Path(f"mock_{item_key.as_base64[0:6]}.bin")
+
+
+class MockItemProducer(I_ItemProducer):
+    _compute_time: dt.timedelta
+    _result_size: float
+
+    def __init__(
+        self, compute_time: dt.timedelta = None, result_size: float = None
+    ) -> None:
+        if compute_time is None:
+            compute_time = dt.timedelta(
+                seconds=np.random.exponential(size=1, scale=10.0)
+            )
+
+        if result_size is None:
+            result_size = np.random.exponential(size=1, scale=1000000.0)
+
+        self._compute_time = compute_time
+        self._result_size = result_size
+
+    def get_item_key(self) -> EntityHash:
+        objstr = (
+            f"{naturalsize(self._result_size)} and {naturaldelta(self._compute_time)}"
+        )
+        hash = EntityHash.HashBytes(objstr.encode(), "sha256")
+        return hash
+
+    def compute_item(self) -> Any:
+        ans = MockObject(size=int(self._result_size), hash=self.get_item_key())
+        sleep(self._compute_time.total_seconds())
+        return ans
+
+    def instantiate_item(self, data: bytes) -> Any:
+        ans = TypeAdapter(MockObject).validate_json(data.decode())
+        assert isinstance(ans, MockObject)
+        return ans
+
+    @staticmethod
+    def serialize_item(item: Any) -> bytes:
+        assert isinstance(item, MockObject)
+        return item.model_dump_json().encode()
+
+
+def produce_mock_result(
+    compute_time: dt.timedelta, result_size: float
+) -> MockItemProducer:
+    item = MockItemProducer(compute_time=compute_time, result_size=result_size)
+    return item
 
 
 def generate_mock_cache_Path(

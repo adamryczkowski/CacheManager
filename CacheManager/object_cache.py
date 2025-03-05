@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import datetime as dt
+from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Protocol, Any
+from typing import Protocol, Any, Optional
 
 from EntityHash import EntityHash
 
 from .abstract_cache_manager import AbstractCacheManager
+from .abstract_cache_manager import CacheItem
 from .ifaces import I_AbstractItemID, I_CacheStorageModify, I_StorageKeyGenerator
 
 
@@ -18,6 +20,28 @@ class ItemProducer(Protocol):
     def instantiate_item(self, data: bytes) -> Any: ...
 
     @staticmethod
+    def serialize_item(item: Any) -> bytes: ...
+
+
+class I_ItemProducer(ABC):
+    """
+    Object that is intended as a wrapper around a function that produces an object of interest.
+    It is expected that user will provide an initializer that takes all the data required to generate the result.
+
+    This object is treated as ephemeral and is not stored anywhere by the cache system. It is expected to be tied to a single call to the cache system.
+    """
+
+    @abstractmethod
+    def get_item_key(self) -> EntityHash: ...
+
+    @abstractmethod
+    def compute_item(self) -> Any: ...
+
+    @abstractmethod
+    def instantiate_item(self, data: bytes) -> Any: ...
+
+    @staticmethod
+    @abstractmethod
     def serialize_item(item: Any) -> bytes: ...
 
 
@@ -54,6 +78,10 @@ class ObjectCache[ItemID: (Path, I_AbstractItemID)]:
     @calculate_hash.setter
     def calculate_hash(self, value: bool):
         self._calculate_hash = value
+
+    @property
+    def free_space(self) -> float:
+        return self._storage.free_space
 
     def __call__(self, object_factory: ItemProducer) -> Any:
         """
@@ -122,6 +150,9 @@ class ObjectCache[ItemID: (Path, I_AbstractItemID)]:
             self._cache_manager.update_item(new_item)
 
         return object
+
+    def get_object_info(self, item_key: EntityHash) -> Optional[CacheItem]:
+        return self._cache_manager.get_item_by_key(item_key)
 
     def prune_cache(self, remove_history: bool = False, verbose: bool = False):
         for item in self._cache_manager.prunning_iterator():

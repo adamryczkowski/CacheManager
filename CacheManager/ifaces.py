@@ -87,11 +87,6 @@ class DC_CacheItem[ItemID: (Path, I_AbstractItemID)](
         else:
             return self.item_storage_key.serialize()
 
-    # @property
-    # def age(self) -> float:
-    #     """Age of the last access in hours"""
-    #     return (dt.datetime.now() - self.last_access_time).total_seconds() / 60 / 60
-
     @property
     def pretty_size(self) -> str:
         return naturalsize(self.filesize * 1024 * 1024 * 1024)
@@ -114,10 +109,10 @@ class I_PersistentDB[ItemID: (Path, I_AbstractItemID)](ABC):
     """Class that abstracts away storage of persistent settings."""
 
     def is_ItemID_Path(self) -> bool:
-        from pathlib import Path
-
-        # noinspection PyUnresolvedReferences
-        return issubclass(self.__orig_class__.__args__[0], Path)
+        # # noinspection PyUnresolvedReferences
+        # return issubclass(self.__orig_class__.__args__[0], Path)
+        return True  # The code above relies on undefined behaviour and sometimes fails.
+        # This is a reason not to use generics in Python anymore.
 
     @abstractmethod
     def add_item(self, item: DC_CacheItem): ...

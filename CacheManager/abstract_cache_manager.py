@@ -43,7 +43,7 @@ class CacheItem[ItemID: (Path, I_AbstractItemID)](DC_CacheItem[ItemID]):
 
     @property
     def utility(self) -> float:
-        return self._cache_manager.calculate_net_utility_of_item(self, self._exists)
+        return self._cache_manager.calculate_net_utility_of_item(self, self.exists)
 
     def verify_hash(self) -> bool:
         # noinspection PyBroadException
@@ -70,6 +70,11 @@ class CacheItem[ItemID: (Path, I_AbstractItemID)](DC_CacheItem[ItemID]):
 
     def __lt__(self, other: CacheItem[ItemID]) -> bool:
         return self.utility < other.utility
+
+    @property
+    def age(self) -> float:
+        """Age of the last access in hours"""
+        return (dt.datetime.now() - self.last_access_time).total_seconds() / 60 / 60
 
 
 class AbstractCacheManager[ItemID: (Path, I_AbstractItemID)]:
@@ -100,6 +105,9 @@ class AbstractCacheManager[ItemID: (Path, I_AbstractItemID)]:
         assert storage is not None
         assert isinstance(storage, I_CacheStorageRead)
 
+        self._db = db
+        self._storage = storage
+
     @property
     def free_space(self) -> float:
         """Returns free space in GB"""
@@ -119,7 +127,9 @@ class AbstractCacheManager[ItemID: (Path, I_AbstractItemID)]:
         """
         Calculate the cost of storing the object in the cache.
         """
+        size /= 1024 * 1024 * 1024  # Convert to GB
         free_space = self.free_space - self.config.reserved_free_space
+        free_space /= 1024 * 1024 * 1024  # Convert to GB
         if existing:
             if free_space < 0:
                 return -float("inf")
@@ -158,14 +168,19 @@ class AbstractCacheManager[ItemID: (Path, I_AbstractItemID)]:
 
         If item does not exist, it would make sense to estimate the expected utility of the decay.
         """
+        item_age = self._db.get_last_access(item.item_key)
+        if item_age is None:
+            item_age = 0.0
+
         positive_utility = (
-            item.compute_time
+            item.compute_time.total_seconds()
+            / 60
             / self.config.cost_of_minute_compute_rel_to_cost_of_1GB
             * item.weight
-            * self._calculate_decay_weight(item.age)
+            * self._calculate_decay_weight(item_age)
         )
         negative_cost = self._calculate_disk_cost_of_new_item(
-            item.size, existing=existing
+            item.filesize, existing=existing
         )
         utility = positive_utility + negative_cost
         return utility

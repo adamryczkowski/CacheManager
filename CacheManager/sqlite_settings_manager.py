@@ -212,7 +212,10 @@ class SQLitePersistentDB[ItemID: (Path, I_AbstractItemID)](I_PersistentDB):
             "SELECT timestamp FROM Accesses WHERE item_key=? ORDER BY timestamp DESC LIMIT 1",
             (item_key.as_base64,),
         )
-        return dt.datetime.fromtimestamp(cursor.fetchone())
+        if (row := cursor.fetchone()) is None:
+            return None
+        else:
+            return dt.datetime.fromtimestamp(row)
 
     @overrides
     def remove_item(self, item_key: EntityHash, remove_history: bool = True):
