@@ -1,7 +1,6 @@
 import datetime as dt
 from pathlib import Path
-from time import sleep
-from typing import Optional, Any
+from typing import Optional, Any, Iterator
 
 import numpy as np
 from EntityHash import EntityHash
@@ -11,7 +10,7 @@ from pydantic import BaseModel, TypeAdapter
 
 from .abstract_cache_manager import AbstractCacheManager
 from .ifaces import ModelCacheManagerConfig, I_CacheStorageModify, I_StorageKeyGenerator
-from .object_cache import ObjectCache, I_ItemProducer
+from .object_cache import ObjectCache, I_MockItemProducer
 from .sqlite_settings_manager import SQLitePersistentDB
 
 
@@ -32,10 +31,14 @@ class MockCacheStorage_Path(I_CacheStorageModify[Path]):
     def __init__(self, total_space: float) -> None:
         """
         :param total_space: Total space allocated for the storage in bytes.
-        :param size_multiplier:
         """
         self._stored_objects = {}
         self._total_space = total_space
+
+    @property
+    def stored_objects(self) -> Iterator[MockObject]:
+        for obj in self._stored_objects.values():
+            yield obj
 
     @overrides
     def remove_item(self, item_storage_key: Path) -> bool:
@@ -56,9 +59,10 @@ class MockCacheStorage_Path(I_CacheStorageModify[Path]):
 
     @overrides
     def save_item(self, object: bytes, item_storage_key: Path):
-        assert isinstance(object, MockObject)
+        assert isinstance(object, bytes)
         assert item_storage_key not in self._stored_objects
-        self._stored_objects[item_storage_key] = object
+        ans = TypeAdapter(MockObject).validate_json(object.decode())
+        self._stored_objects[item_storage_key] = ans
 
     @property
     @overrides
@@ -80,6 +84,10 @@ class MockCacheStorage_Path(I_CacheStorageModify[Path]):
     def does_item_exists(self, item_storage_key: Path) -> bool:
         return item_storage_key in self._stored_objects
 
+    @overrides
+    def close(self):
+        pass
+
 
 class MockStorageKeyGenerator_Path(BaseModel, I_StorageKeyGenerator[Path]):
     prefix: Path = Path()
@@ -88,7 +96,7 @@ class MockStorageKeyGenerator_Path(BaseModel, I_StorageKeyGenerator[Path]):
         return self.prefix / Path(f"mock_{item_key.as_base64[0:6]}.bin")
 
 
-class MockItemProducer(I_ItemProducer):
+class MockItemProducer(I_MockItemProducer):
     _compute_time: dt.timedelta
     _result_size: float
 
@@ -106,6 +114,7 @@ class MockItemProducer(I_ItemProducer):
         self._compute_time = compute_time
         self._result_size = result_size
 
+    @overrides
     def get_item_key(self) -> EntityHash:
         objstr = (
             f"{naturalsize(self._result_size)} and {naturaldelta(self._compute_time)}"
@@ -113,20 +122,28 @@ class MockItemProducer(I_ItemProducer):
         hash = EntityHash.HashBytes(objstr.encode(), "sha256")
         return hash
 
+    @overrides
     def compute_item(self) -> Any:
         ans = MockObject(size=int(self._result_size), hash=self.get_item_key())
-        sleep(self._compute_time.total_seconds())
+        # sleep(self._compute_time.total_seconds())
         return ans
 
+    @overrides
     def instantiate_item(self, data: bytes) -> Any:
         ans = TypeAdapter(MockObject).validate_json(data.decode())
         assert isinstance(ans, MockObject)
         return ans
 
     @staticmethod
+    @overrides
     def serialize_item(item: Any) -> bytes:
         assert isinstance(item, MockObject)
         return item.model_dump_json().encode()
+
+    @property
+    @overrides
+    def compute_time(self) -> dt.timedelta:
+        return self._compute_time
 
 
 def produce_mock_result(
@@ -140,7 +157,7 @@ def generate_mock_cache_Path(
     db_filename: Path,
     total_space: float,
     initial_config: ModelCacheManagerConfig = None,
-) -> ObjectCache[Path]:
+) -> tuple[ObjectCache[Path], MockCacheStorage_Path]:
     db = SQLitePersistentDB(db_filename, initial_config=initial_config)
     storage = MockCacheStorage_Path(total_space=total_space)
 
@@ -153,7 +170,7 @@ def generate_mock_cache_Path(
         calculate_hash=True,
     )
 
-    return cache
+    return cache, storage
 
 
 def generate_mock_cache_view(

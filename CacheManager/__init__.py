@@ -10,8 +10,12 @@ from .ifaces import (
 )
 from .sqlite_settings_manager import SQLitePersistentDB
 from .abstract_cache_manager import AbstractCacheManager
-from .object_cache import ObjectCache, I_ItemProducer, ItemProducer
-from .file_cache import generate_file_cache_view, generate_file_cache
+from .object_cache import ObjectCache, I_ItemProducer  # , ItemProducer
+from .file_cache import (
+    generate_file_cache_view,
+    generate_file_cache,
+    StorageKeyGenerator_Path,
+)
 from .mock_cache import (
     generate_mock_cache_Path,
     generate_mock_cache_view,
@@ -31,7 +35,7 @@ __all__ = [
     "SQLitePersistentDB",
     "AbstractCacheManager",
     "I_ItemProducer",
-    "ItemProducer",
+    # "ItemProducer",
     "MockItemProducer",
     "ObjectCache",
     "produce_mock_result",
@@ -39,4 +43,5 @@ __all__ = [
     "generate_file_cache",
     "generate_mock_cache_Path",
     "generate_mock_cache_view",
+    "StorageKeyGenerator_Path",
 ]

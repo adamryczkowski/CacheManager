@@ -168,9 +168,10 @@ class AbstractCacheManager[ItemID: (Path, I_AbstractItemID)]:
 
         If item does not exist, it would make sense to estimate the expected utility of the decay.
         """
-        item_age = self._db.get_last_access(item.item_key)
-        if item_age is None:
-            item_age = 0.0
+        last_access_time = self._db.get_last_access(item.item_key)
+        if last_access_time is None:
+            last_access_time = dt.datetime.now()
+        item_age = (dt.datetime.now() - last_access_time).total_seconds() / 60.0
 
         positive_utility = (
             item.compute_time.total_seconds()
@@ -185,10 +186,12 @@ class AbstractCacheManager[ItemID: (Path, I_AbstractItemID)]:
         utility = positive_utility + negative_cost
         return utility
 
-    def iterate_cache_items(self) -> Iterator[CacheItem[ItemID]]:
+    def iterate_cache_items(
+        self, OnlyExisting: bool = True
+    ) -> Iterator[CacheItem[ItemID]]:
         for db_item in self._db.iterate_items():
             item = self._enrich_cacheitem(db_item)
-            if item.exists:
+            if item.exists or not OnlyExisting:
                 yield item
 
     def prunning_iterator(
@@ -316,3 +319,7 @@ class AbstractCacheManager[ItemID: (Path, I_AbstractItemID)]:
             filesize=filesize,
             weight=weight,
         )
+
+    def close(self):
+        self._db.close()
+        self._storage.close()

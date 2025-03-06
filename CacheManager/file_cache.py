@@ -46,7 +46,10 @@ class FileCacheStorage(I_CacheStorageModify):
     @property
     @overrides
     def free_space(self) -> float:
-        return os.statvfs(self._cache_root_path).f_bavail / 1024 / 1024
+        return (
+            os.statvfs(self._cache_root_path).f_bavail
+            * os.statvfs(self._cache_root_path).f_bsize
+        )
 
     @property
     @overrides
@@ -55,11 +58,15 @@ class FileCacheStorage(I_CacheStorageModify):
 
     @overrides
     def calculate_hash(self, item_storage_key: Path) -> Optional[EntityHash]:
-        return EntityHash.FromDiskFile(item_storage_key, "sha256")
+        return EntityHash.HashDiskFile(item_storage_key, "sha256")
 
     @overrides
     def does_item_exists(self, item_storage_key: Path) -> bool:
         return item_storage_key.exists()
+
+    @overrides
+    def close(self):
+        pass
 
 
 class StorageKeyGenerator_Path(BaseModel, I_StorageKeyGenerator[Path]):
@@ -79,10 +86,11 @@ def generate_file_cache(
     cached_dir: Path,
     initial_config: ModelCacheManagerConfig = None,
     storage_key_generator: StorageKeyGenerator_Path = StorageKeyGenerator_Path(),
-    db_filename: str = ".metadata.sqlite",
+    db_filename: str | Path = ".metadata.sqlite",
     calculate_hash: bool = True,
 ) -> ObjectCache[Path]:
-    db_filename = Path(db_filename)
+    if isinstance(db_filename, str):
+        db_filename = Path(db_filename)
     if not db_filename.is_absolute():
         db_filename = cached_dir / db_filename
     db = SQLitePersistentDB(cached_dir / db_filename, initial_config=initial_config)

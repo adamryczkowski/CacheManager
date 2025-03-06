@@ -55,7 +55,7 @@ class DC_CacheItem[ItemID: (Path, I_AbstractItemID)](
     hash: Optional[EntityHash]  # A hash of the item to check for consistency
     item_storage_key: ItemID  # Path or any other type of item ID in future.
     compute_time: dt.timedelta  # in minutes
-    filesize: PositiveFloat  # in GB
+    filesize: PositiveFloat  # in bytes
     weight: PositiveFloat
 
     # last_access_time: dt.datetime
@@ -67,7 +67,7 @@ class DC_CacheItem[ItemID: (Path, I_AbstractItemID)](
             ans += f"{shorten_path(self.item_storage_key.absolute(), 30 + file_len)}:\n"
         else:
             ans += f"storage key={self.item_storage_key.pretty_shorten(50)}:\n"
-        ans += f" item_key={self.item_key}\n"
+        ans += f" item_key={self.pretty_key}\n"
         ans += f" hash={self.hash}\n"
         ans += f" object size={self.pretty_size}\n"
         ans += f" compute time={self.pretty_compute_time}\n"
@@ -83,19 +83,27 @@ class DC_CacheItem[ItemID: (Path, I_AbstractItemID)](
     @property
     def serialized_filename(self) -> str:
         if isinstance(self.item_storage_key, Path):
-            return str(self.item_storage_key.absolute())
+            return str(self.item_storage_key)
         else:
             return self.item_storage_key.serialize()
 
     @property
     def pretty_size(self) -> str:
-        return naturalsize(self.filesize * 1024 * 1024 * 1024)
+        return naturalsize(self.filesize)
 
     @property
     def pretty_compute_time(self) -> str:
         return naturaldelta(
             self.compute_time, months=False, minimum_unit="microseconds"
         )
+
+    @property
+    def pretty_description(self) -> str:
+        return f"{self.pretty_key}: {self.pretty_size} and {self.pretty_compute_time}"
+
+    @property
+    def pretty_key(self) -> str:
+        return self.item_key.as_base64[:10]
 
     def __eq__(self, other: DC_CacheItem[ItemID]) -> bool:
         ans = self.item_key == other.item_key
@@ -153,6 +161,9 @@ class I_PersistentDB[ItemID: (Path, I_AbstractItemID)](ABC):
     @abstractmethod
     def clear_items(self): ...
 
+    @abstractmethod
+    def close(self): ...
+
 
 class I_CacheStorageRead[ItemID: (Path, I_AbstractItemID)](ABC):
     @property
@@ -177,6 +188,9 @@ class I_CacheStorageRead[ItemID: (Path, I_AbstractItemID)](ABC):
 
     @abstractmethod
     def does_item_exists(self, item_storage_key: ItemID) -> bool: ...
+
+    @abstractmethod
+    def close(self): ...
 
 
 class I_CacheStorageModify[ItemID: (Path, I_AbstractItemID)](

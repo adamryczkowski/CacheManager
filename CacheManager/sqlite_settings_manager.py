@@ -129,12 +129,16 @@ class SQLitePersistentDB[ItemID: (Path, I_AbstractItemID)](I_PersistentDB):
 
     @overrides
     def add_item(self, item: DC_CacheItem):
+        if item.hash is None:
+            item_hash = ""
+        else:
+            item_hash = item.hash.as_base64
         self.connection.execute(
             "INSERT INTO Objects (item_key, item_storage_key, hash, compute_time, weight, filesize) VALUES (?, ?, ?, ?, ?, ?)",
             (
                 item.item_key.as_base64,
                 str(item.serialized_filename),
-                item.hash.as_base64,
+                item_hash,
                 str(item.compute_time),
                 str(item.weight),
                 str(item.filesize),
@@ -150,18 +154,21 @@ class SQLitePersistentDB[ItemID: (Path, I_AbstractItemID)](I_PersistentDB):
         row = cursor.fetchone()
         if row is None:
             return None
-        item_storage_key, hash, compute_time, weight, filesize = row
+        item_storage_key, item_hash, compute_time, weight, filesize = row
 
         if self.is_ItemID_Path():
             item_storage_key = Path(item_storage_key)
         else:
             item_storage_key = I_AbstractItemID.Unserialize(item_storage_key)
-        hash = EntityHash.FromBase64(hash)
+        if item_hash != "":
+            item_hash = EntityHash.FromBase64(item_hash)
+        else:
+            item_hash = None
 
         return DC_CacheItem(
             item_key=item_key,
             item_storage_key=item_storage_key,
-            hash=hash,
+            hash=item_hash,
             compute_time=compute_time,
             filesize=filesize,
             weight=weight,
@@ -180,13 +187,16 @@ class SQLitePersistentDB[ItemID: (Path, I_AbstractItemID)](I_PersistentDB):
         row = cursor.fetchone()
         if row is None:
             return None
-        item_key, item_storage_key, hash, compute_time, weight, filesize = row
-        hash = EntityHash.FromBase64(hash)
+        item_key, item_storage_key, item_hash, compute_time, weight, filesize = row
+        if item_hash == "":
+            item_hash = None
+        else:
+            item_hash = EntityHash.FromBase64(item_hash)
         item_key = EntityHash.FromBase64(item_key)
         return DC_CacheItem(
             item_key=item_key,
             item_storage_key=Path(storage_key) / self.database_path,
-            hash=hash,
+            hash=item_hash,
             compute_time=compute_time,
             weight=weight,
             filesize=filesize,
@@ -215,7 +225,7 @@ class SQLitePersistentDB[ItemID: (Path, I_AbstractItemID)](I_PersistentDB):
         if (row := cursor.fetchone()) is None:
             return None
         else:
-            return dt.datetime.fromtimestamp(row)
+            return dt.datetime.fromtimestamp(row[0])
 
     @overrides
     def remove_item(self, item_key: EntityHash, remove_history: bool = True):
@@ -290,7 +300,13 @@ class SQLitePersistentDB[ItemID: (Path, I_AbstractItemID)](I_PersistentDB):
             yield ans
 
     # noinspection SqlWithoutWhere
+    @overrides
     def clear_items(self):
         self.connection.execute("DELETE FROM Objects")
         self.connection.execute("DELETE FROM Accesses")
         self.connection.commit()
+
+    @overrides
+    def close(self):
+        if self.connection is not None:
+            self.connection.close()
