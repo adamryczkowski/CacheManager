@@ -23,6 +23,9 @@ from .mock_cache import (
     produce_mock_result,
 )
 
+from .serialization_json import I_JSONItemPromise, json_wrap_promise
+from .serialization_pickle import I_PickledItemPromise, pickle_wrap_promise
+
 __all__ = [
     "shorten_path",
     "I_AbstractItemID",
@@ -35,7 +38,6 @@ __all__ = [
     "SQLitePersistentDB",
     "AbstractCacheManager",
     "I_ItemProducer",
-    # "ItemProducer",
     "MockItemProducer",
     "ObjectCache",
     "produce_mock_result",
@@ -44,4 +46,8 @@ __all__ = [
     "generate_mock_cache_Path",
     "generate_mock_cache_view",
     "StorageKeyGenerator_Path",
+    "I_JSONItemPromise",
+    "json_wrap_promise",
+    "I_PickledItemPromise",
+    "pickle_wrap_promise",
 ]

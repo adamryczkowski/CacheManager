@@ -55,9 +55,8 @@ class ItemPromise(I_ItemProducer):
     def instantiate_item(self, data: bytes) -> Any:
         return f"Computed item of size {len(data)} bytes"
 
-    @staticmethod
     @overrides
-    def serialize_item(item: Any) -> bytes:
+    def serialize_item(self, item: Any) -> bytes:
         assert isinstance(item, str)
         assert item.startswith("Computed item of size ")
         itemsize = int(item[22:-6])

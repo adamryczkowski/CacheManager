@@ -134,9 +134,8 @@ class MockItemProducer(I_MockItemProducer):
         assert isinstance(ans, MockObject)
         return ans
 
-    @staticmethod
     @overrides
-    def serialize_item(item: Any) -> bytes:
+    def serialize_item(self, item: Any) -> bytes:
         assert isinstance(item, MockObject)
         return item.model_dump_json().encode()
 

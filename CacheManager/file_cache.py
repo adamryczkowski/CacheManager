@@ -21,6 +21,7 @@ class FileCacheStorage(I_CacheStorageModify):
 
     @overrides
     def remove_item(self, item_storage_key: Path) -> bool:
+        item_storage_key = self.make_absolute_item_storage_key(item_storage_key)
         try:
             item_storage_key.unlink()
         except Exception as _:
@@ -29,6 +30,7 @@ class FileCacheStorage(I_CacheStorageModify):
 
     @overrides
     def load_item(self, item_storage_key: Path) -> bytes:
+        item_storage_key = self.make_absolute_item_storage_key(item_storage_key)
         if not item_storage_key.exists():
             raise FileExistsError(f"File {item_storage_key} does not exist")
         with open(item_storage_key, "rb") as f:
@@ -36,6 +38,7 @@ class FileCacheStorage(I_CacheStorageModify):
 
     @overrides
     def save_item(self, object: bytes, item_storage_key: Path):
+        item_storage_key = self.make_absolute_item_storage_key(item_storage_key)
         if item_storage_key.exists():
             raise FileExistsError(
                 f"File {item_storage_key} already exists. Cannot silently overwrite."
@@ -51,6 +54,10 @@ class FileCacheStorage(I_CacheStorageModify):
             * os.statvfs(self._cache_root_path).f_bsize
         )
 
+    @overrides
+    def make_absolute_item_storage_key(self, item_storage_key: Path) -> Path:
+        return self._cache_root_path / item_storage_key
+
     @property
     @overrides
     def storage_id(self) -> str:
@@ -58,10 +65,13 @@ class FileCacheStorage(I_CacheStorageModify):
 
     @overrides
     def calculate_hash(self, item_storage_key: Path) -> Optional[EntityHash]:
-        return EntityHash.HashDiskFile(item_storage_key, "sha256")
+        return EntityHash.HashDiskFile(
+            self.make_absolute_item_storage_key(item_storage_key), "sha256"
+        )
 
     @overrides
     def does_item_exists(self, item_storage_key: Path) -> bool:
+        item_storage_key = self.make_absolute_item_storage_key(item_storage_key)
         return item_storage_key.exists()
 
     @overrides
@@ -76,10 +86,8 @@ class StorageKeyGenerator_Path(BaseModel, I_StorageKeyGenerator[Path]):
     hash_len: int = 8
 
     def generate_item_storage_key(self, item_key: EntityHash) -> Path:
-        return (
-            self.subfolder
-            / f"{self.file_prefix}{item_key.as_base64[:self.hash_len]}.{self.file_extension}"
-        )
+        safe_base64 = item_key.as_base64[: self.hash_len].replace("/", "_")
+        return self.subfolder / f"{self.file_prefix}{safe_base64}.{self.file_extension}"
 
 
 def generate_file_cache(

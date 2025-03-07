@@ -41,7 +41,6 @@ class I_ItemProducer(ABC):
     @abstractmethod
     def instantiate_item(self, data: bytes) -> Any: ...
 
-    @staticmethod
     @abstractmethod
     def serialize_item(item: Any) -> bytes: ...
 
@@ -175,7 +174,10 @@ class ObjectCache[ItemID: (Path, I_AbstractItemID)]:
                 return object
 
         # At this point we don't care about the old item anymore. We are going to store or update the new one.
-        self._storage.save_item(object_bytes, item_storage_key=storage_key)
+        self._storage.save_item(
+            object_bytes,
+            item_storage_key=self._storage.make_absolute_item_storage_key(storage_key),
+        )
         if new_item.hash is None and self._calculate_hash:
             new_item.hash = self._storage.calculate_hash(storage_key)
 
@@ -192,6 +194,17 @@ class ObjectCache[ItemID: (Path, I_AbstractItemID)]:
 
     def get_object_info(self, item_key: EntityHash) -> Optional[CacheItem]:
         return self._cache_manager.get_item_by_key(item_key)
+
+    def remove_all_cached_items(self, remove_history: bool = False):
+        for item in self._cache_manager.iterate_cache_items():
+            assert item.exists
+            if not self._storage.remove_item(item.item_storage_key):
+                raise ResourceWarning(
+                    f"Cannot remove item {item.item_storage_key} from cache"
+                )
+            self._cache_manager.remove_item(
+                item.item_key, remove_history=remove_history
+            )
 
     def prune_cache(self, remove_history: bool = False, verbose: bool = False):
         for item in self._cache_manager.prunning_iterator():

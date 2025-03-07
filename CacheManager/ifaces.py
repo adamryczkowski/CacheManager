@@ -3,13 +3,17 @@ import datetime as dt
 from abc import ABC, abstractmethod
 from enum import Enum
 from pathlib import Path
-from typing import Optional, Iterator
+from typing import Optional, Iterator, Protocol, Any
 
 from EntityHash import EntityHash
 from humanize import naturalsize, naturaldelta
 from pydantic import BaseModel, PositiveFloat
 
 from .pretty_path import shorten_path
+
+
+class ProducerCallback(Protocol):
+    def __call__(self, *args, **kwargs) -> Any: ...
 
 
 class I_AbstractItemID(ABC, BaseModel):
@@ -206,6 +210,9 @@ class I_CacheStorageModify[ItemID: (Path, I_AbstractItemID)](
 
     @abstractmethod
     def save_item(self, object: bytes, item_storage_key: ItemID): ...
+
+    @abstractmethod
+    def make_absolute_item_storage_key(self, item_storage_key: ItemID) -> ItemID: ...
 
 
 class I_StorageKeyGenerator[ItemID: (Path, I_AbstractItemID)](ABC):
