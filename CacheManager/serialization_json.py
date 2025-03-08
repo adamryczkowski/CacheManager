@@ -17,6 +17,7 @@ class I_JSONItemPromise(I_ItemProducer):
         assert isinstance(item_key, EntityHash)
         assert issubclass(item_type, BaseModel)
         self.item_key = item_key
+        self.item_type = item_type
 
     @overrides
     def get_item_key(self) -> EntityHash:
@@ -32,10 +33,15 @@ class I_JSONItemPromise(I_ItemProducer):
     def serialize_item(self, item: Any) -> bytes:
         assert isinstance(item, self.item_type)
         return item.model_dump_json().encode()
+        item.verify()
 
 
 def json_wrap_promise(
-    _item_key: EntityHash, _producer: ProducerCallback, *args, **kwargs
+    _item_key: EntityHash,
+    item_type: Type[BaseModel],
+    _producer: ProducerCallback,
+    *args,
+    **kwargs,
 ) -> I_JSONItemPromise:
     class PickledItemPromise(I_JSONItemPromise):
         promise: ProducerCallback
@@ -45,11 +51,13 @@ def json_wrap_promise(
         def __init__(
             self,
             item_key: EntityHash,
+            item_type: Type[BaseModel],
             promise: ProducerCallback,
             args: tuple[Any, ...],
             kwargs: dict,
         ) -> None:
-            super().__init__(item_key)
+            super().__init__(item_key=item_key, item_type=item_type)
+            # TODO In future we may try to deduce the item_type from the signature of the producer.
             self.promise = promise
             self.args = args
             self.kwargs = kwargs
@@ -58,4 +66,10 @@ def json_wrap_promise(
         def compute_item(self) -> Any:
             return self.promise(*self.args, **self.kwargs)
 
-    return PickledItemPromise(_item_key, _producer, args, kwargs)
+    return PickledItemPromise(
+        item_key=_item_key,
+        item_type=item_type,
+        promise=_producer,
+        args=args,
+        kwargs=kwargs,
+    )

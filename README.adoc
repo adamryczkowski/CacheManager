@@ -63,7 +63,5 @@ cache.prune_cache(verbose=True)
 
 
 == TODO
-- [ ] Fix bug: read cache ignores storage prefix.
-- [ ] Add two better implementations of ObjectPromise: one that pickles the object, and the other that JSON-izes it (using pydantic).
-- [ ] Remove generics from `ObjectCache` and `CacheItem` - change the API instead.
 - [ ] Fix the documentation so it reflects the major_rewrite of the API
+- [ ] Remove generics from `ObjectCache` and `CacheItem` - change the API instead.

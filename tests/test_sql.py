@@ -5,7 +5,12 @@ import datetime as dt
 
 
 def test_connection():
-    man = SQLitePersistentDB[Path](Path(__file__).parent / "test.db")
+    db_path = Path(__file__).parent / "test_mock_cache.db"
+
+    if db_path.exists():
+        db_path.unlink()
+
+    man = SQLitePersistentDB[Path](db_path)
     assert man.is_ItemID_Path()
     man.clear_items()
     some_hash = calc_hash("some item content")
@@ -32,6 +37,7 @@ def test_connection():
     man.store_config(config)
     man.commit()
     assert man.config.reserved_free_space == 1.0
+    man.close()
 
 
 if __name__ == "__main__":

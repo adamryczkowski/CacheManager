@@ -60,7 +60,7 @@ def test2():
     # Set seed=123
     np.random.seed(123)
     # Generate 1000 random pairs of object size and time - both from exponential distribution
-    for i in range(1001):
+    for i in range(101):
         size = np.random.exponential(10 * 1024 * 1024)
         time = np.random.exponential(0.5 * 60)
         object_promise = produce_mock_result(

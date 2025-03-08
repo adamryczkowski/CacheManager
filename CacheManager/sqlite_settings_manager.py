@@ -42,6 +42,8 @@ class SQLitePersistentDB[ItemID: (Path, I_AbstractItemID)](I_PersistentDB):
     ):
         self.database_path = database_path
         self._make_sure_db_exists()
+        if initial_config is None:
+            initial_config = ModelCacheManagerConfig()
         self._ensure_tables(initial_config)
 
     def _make_sure_db_exists(self):

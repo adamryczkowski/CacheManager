@@ -88,6 +88,10 @@ class MockCacheStorage_Path(I_CacheStorageModify[Path]):
     def close(self):
         pass
 
+    @overrides
+    def make_absolute_item_storage_key(self, item_storage_key: Path) -> Path:
+        return item_storage_key
+
 
 class MockStorageKeyGenerator_Path(BaseModel, I_StorageKeyGenerator[Path]):
     prefix: Path = Path()
