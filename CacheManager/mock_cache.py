@@ -8,6 +8,7 @@ from humanize import naturaldelta, naturalsize
 from overrides import overrides
 from pydantic import BaseModel, TypeAdapter
 
+from . import I_AbstractItemID
 from .abstract_cache_manager import AbstractCacheManager
 from .ifaces import ModelCacheManagerConfig, I_CacheStorageModify, I_StorageKeyGenerator
 from .object_cache import ObjectCache, I_MockItemProducer
@@ -147,6 +148,10 @@ class MockItemProducer(I_MockItemProducer):
     @overrides
     def compute_time(self) -> dt.timedelta:
         return self._compute_time
+
+    @overrides
+    def propose_item_storage_key(self) -> Optional[Path | I_AbstractItemID]:
+        return None
 
 
 def produce_mock_result(

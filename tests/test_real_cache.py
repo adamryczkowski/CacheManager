@@ -1,4 +1,4 @@
-from typing import Any
+from typing import Any, Optional
 
 from EntityHash import EntityHash
 
@@ -7,6 +7,7 @@ from CacheManager import (
     ModelCacheManagerConfig,
     StorageKeyGenerator_Path,
     I_ItemProducer,
+    I_AbstractItemID,
 )
 from pathlib import Path
 import datetime as dt
@@ -61,6 +62,10 @@ class ItemPromise(I_ItemProducer):
         assert item.startswith("Computed item of size ")
         itemsize = int(item[22:-6])
         return bytes_array(itemsize)
+
+    @overrides
+    def propose_item_storage_key(self) -> Optional[Path | I_AbstractItemID]:
+        return None
 
 
 def mock_result_promise(compute_time: dt.timedelta, result_size: int) -> ItemPromise:

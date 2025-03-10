@@ -1,9 +1,12 @@
-from typing import Any
+from pathlib import Path
+from typing import Any, Optional
 from typing import Type
 
 from EntityHash import EntityHash
 from overrides import overrides
 from pydantic import BaseModel, TypeAdapter
+
+from . import I_AbstractItemID
 from .ifaces import ProducerCallback
 
 from .object_cache import I_ItemProducer
@@ -34,6 +37,10 @@ class I_JSONItemPromise(I_ItemProducer):
         assert isinstance(item, self.item_type)
         return item.model_dump_json().encode()
         item.verify()
+
+    @overrides
+    def propose_item_storage_key(self) -> Optional[Path | I_AbstractItemID]:
+        return None
 
 
 def json_wrap_promise(

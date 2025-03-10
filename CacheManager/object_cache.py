@@ -44,6 +44,9 @@ class I_ItemProducer(ABC):
     @abstractmethod
     def serialize_item(item: Any) -> bytes: ...
 
+    @abstractmethod
+    def propose_item_storage_key(self) -> Optional[Path | I_AbstractItemID]: ...
+
 
 class I_MockItemProducer(I_ItemProducer):
     @property
@@ -124,7 +127,10 @@ class ObjectCache[ItemID: (Path, I_AbstractItemID)]:
                 dt.datetime.now()
             )  # The end of not-predictable part of the computation
 
-        storage_key = self._storage_key_generator.generate_item_storage_key(item_key)
+        if storage_key := object_factory.propose_item_storage_key() is None:
+            storage_key = self._storage_key_generator.generate_item_storage_key(
+                item_key
+            )
         if item is not None:
             # the cache has seen this item before. It can either be in the cache, or the item has been pruned.
             # Anyway, there is no point in calculating the hash again.

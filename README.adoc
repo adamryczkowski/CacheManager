@@ -1,8 +1,8 @@
-== Overview
+from pathlib import Path== Overview
 
 CacheManager is a Python library that manages the cache of data that is too expensive to compute.It provides functionality to store, retrieve, and manage cached objects efficiently, ensuring that the cost of storing an object is less than the cost of re-computing it.
 
-CacheManager in itself is decoupled from the metadata storage and object storage. Currently it contains example implementation of metadata storage in SQLite database and object storage in the file system (and a mock storage used by the unit tests).  The user can provide their own implementations of these interfaces, which will be covered in the future documentation.
+CacheManager in itself is decoupled from the metadata storage and object storage.Currently it contains example implementation of metadata storage in SQLite database and object storage in the file system (and a mock storage used by the unit tests).The user can provide their own implementations of these interfaces, which will be covered in the future documentation.
 
 == Installation
 
@@ -101,7 +101,7 @@ def some_heavy_computation(
 
 Cache cannot just store a black-box result object: it needs to know how to serialize and deserialize it. The `I_ItemProducer` interface provides methods for that (and also bundles it with the key of the object).
 
-=== JSON serialization
+==== JSON serialization
 
 JSON serialization is similar - it requires the user to also pass a class type that will be serialized to and deserialized from JSON. This is because string is insufficient means to name a class in Python.
 
@@ -150,19 +150,22 @@ def wrapped_heavy_computation(
 
 ----
 
-=== Custom serialization
+==== Custom serialization
 
-If the user wants to use a custom serialization method, they can implement their own `I_ItemProducer` object. The object must implement the `serialize` and `deserialize` methods.
+If the user wants to use a custom serialization method, they can implement their own `I_ItemProducer` object.The object must implement the `serialize` and `deserialize` methods.
 
 [source,python]
 ----
 from __future__ import annotations
-from CacheManager import I_ItemProducer, calc_hash, EntityHash
-from typing import Any
-import time
+
 import datetime as dt
 import pickle
+import time
 import zlib
+from pathlib import Path
+from typing import Any, Optional
+
+from CacheManager import I_ItemProducer, calc_hash, EntityHash, I_AbstractItemID
 
 class SomeHeavyComputation(I_ItemProducer):
     """Class that encapsulates the computation of a heavy object together with its serialization functions and means to generate its ID (item_key) that is used to identify it in the cache.
@@ -202,10 +205,16 @@ class SomeHeavyComputation(I_ItemProducer):
         compressed_bytes = zlib.compress(bytes)
         return compressed_bytes
 
+    # @overrides
+    def propose_item_storage_key(self)-> Optional[Path | I_AbstractItemID]:
+        return None # This function allows an alternative way to compute storage key for the item. If it is not provided, the default storage key generation object is used.
+
+
+
 # We will use the `SomeHeavyComputation` class constructor directly in place of the `json_wrap_promise` or `pickle_wrap_promise` functions.
 ----
 
-TIP: NB Code above has `# @overrides` commented out. I personally recommend to add `from overrides import overrides` into your project and have the method overrides being verified at runtime by this excellent library!
+TIP: NB Code above has `# @overrides` commented out.I personally recommend to add `from overrides import overrides` into your project and have the method overrides being verified at runtime by this excellent library!
 
 === `item_key`
 

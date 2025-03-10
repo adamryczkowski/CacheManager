@@ -1,9 +1,11 @@
 import pickle
-from typing import Any
+from pathlib import Path
+from typing import Any, Optional
 
 from EntityHash import EntityHash
 from overrides import overrides
 
+from . import I_AbstractItemID
 from .object_cache import I_ItemProducer
 from .ifaces import ProducerCallback
 
@@ -31,6 +33,10 @@ class I_PickledItemPromise(I_ItemProducer):
     def serialize_item(self, item: Any) -> bytes:
         bytes = pickle.dumps(item)
         return bytes
+
+    @overrides
+    def propose_item_storage_key(self) -> Optional[Path | I_AbstractItemID]:
+        return None
 
 
 def pickle_wrap_promise(

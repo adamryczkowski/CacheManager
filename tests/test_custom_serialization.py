@@ -6,7 +6,7 @@ import time
 import zlib
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import Any
+from typing import Any, Optional
 
 import numpy as np
 import pytest
@@ -18,6 +18,7 @@ from CacheManager import (
     StorageKeyGenerator_Path,
     I_ItemProducer,
     ObjectCache,
+    I_AbstractItemID,
 )
 
 
@@ -62,6 +63,10 @@ class SomeHeavyComputation(I_ItemProducer):
         bytes = pickle.dumps(item)
         compressed_bytes = zlib.compress(bytes)
         return compressed_bytes
+
+    # @overrides
+    def propose_item_storage_key(self) -> Optional[Path | I_AbstractItemID]:
+        return None
 
 
 @pytest.fixture
