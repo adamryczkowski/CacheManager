@@ -297,4 +297,5 @@ If you choose to remove the history (of accesses), the cache will forget about t
 
 
 == TODO
+- [ ] Allow for more than one stored objects for a single cache item - e.g. a binary file and a JSON metadata. Cache will fail if a single stored object cannot be found.
 - [ ] Remove generics from `ObjectCache` and `CacheItem` - Python's support for generics is too poor.
