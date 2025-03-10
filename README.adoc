@@ -23,6 +23,7 @@ poetry add git+https://github.com/adamryczkowski/CacheManager.git
 == Usage
 
 Using a cache requires four elements:
+
 1. A cache instance that provides the functionality to store, retrieve, and manage cached objects.
 1. A pure function object that will compute the object if it is not found in the cache. (It makes no sense to cache a function that has side effects).
 2. A serializable object holding the result of the computation.
