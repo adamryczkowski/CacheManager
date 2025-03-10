@@ -1,56 +1,67 @@
 import datetime as dt
 import math
 import os
-import numpy as np
+import pickle
+import time
+import zlib
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from typing import Any
 
+import numpy as np
 import pytest
-from EntityHash import calc_hash
-from pydantic import BaseModel, ConfigDict
+from EntityHash import calc_hash, EntityHash
 
 from CacheManager import (
     generate_file_cache,
     ModelCacheManagerConfig,
     StorageKeyGenerator_Path,
-    json_wrap_promise,
     I_ItemProducer,
+    ObjectCache,
 )
-import time
 
 
-class SomeHeavyResult(BaseModel):
-    data: bytes
-    model_config = ConfigDict(ser_json_bytes="base64", val_json_bytes="base64")
+class SomeHeavyResult:
+    _data: bytes
 
     def __init__(self, object_size: int):
         # Array of random bytes of size 'object_size'
-        assert isinstance(object_size, int)
-
-        data = np.random.bytes(object_size)
-        super().__init__(data=data)
+        self._data = np.random.bytes(object_size)
+        assert isinstance(self._data, bytes)
 
 
-def some_heavy_computation(
-    arg1_important_arg: str, arg2_compute_time: dt.timedelta, arg3_result_size: int
-) -> SomeHeavyResult:
-    time.sleep(arg2_compute_time.total_seconds())
-    return SomeHeavyResult(arg3_result_size)
+class SomeHeavyComputation(I_ItemProducer):
+    compute_arguments: dict
 
+    def __init__(self, **kwargs):
+        self.compute_arguments = kwargs
 
-def wrapped_heavy_computation(
-    arg1_important_arg: str, arg2_compute_time: dt.timedelta, arg3_result_size: int
-) -> I_ItemProducer:
-    kwargs = {
-        "arg1_important_arg": arg1_important_arg,
-        "arg2_compute_time": arg2_compute_time,
-        "arg3_result_size": arg3_result_size,
-    }
-    item_key = calc_hash(kwargs)
-    # noinspection PyTypeChecker
-    return json_wrap_promise(
-        item_key, SomeHeavyResult, _producer=some_heavy_computation, **kwargs
-    )
+    # @overrides
+    def get_item_key(self) -> EntityHash:
+        return calc_hash(self.compute_arguments)
+
+    # @overrides
+    def compute_item(self) -> Any:
+        return self.some_heavy_computation(**self.compute_arguments)
+
+    @staticmethod
+    def some_heavy_computation(
+        arg1_important_arg: str, arg2_compute_time: dt.timedelta, arg3_result_size: int
+    ) -> SomeHeavyResult:
+        time.sleep(arg2_compute_time.total_seconds())
+        return SomeHeavyResult(arg3_result_size)
+
+    # @overrides
+    def instantiate_item(self, data: bytes) -> Any:
+        uncompressed_data = zlib.decompress(data)
+        item = pickle.loads(uncompressed_data)
+        return item
+
+    # @overrides
+    def serialize_item(self, item: Any) -> bytes:
+        bytes = pickle.dumps(item)
+        compressed_bytes = zlib.compress(bytes)
+        return compressed_bytes
 
 
 @pytest.fixture
@@ -80,7 +91,7 @@ def cache():
     db_path.unlink()
 
 
-def test1(cache):
+def test1(cache: ObjectCache):
     cache = cache
     storage_path = cache.storage.storage_id
     actual_free_space = (
@@ -91,7 +102,7 @@ def test1(cache):
         < 4096
     )  # Should match within 4kB
 
-    object_promise = wrapped_heavy_computation(
+    object_promise = SomeHeavyComputation(
         arg1_important_arg="test1",
         arg2_compute_time=dt.timedelta(seconds=5),
         arg3_result_size=128,
@@ -103,7 +114,7 @@ def test1(cache):
     assert cache_item.exists
     assert cache.storage.does_item_exists(cache_item.item_storage_key)
 
-    mock_object_promise = wrapped_heavy_computation(
+    mock_object_promise = SomeHeavyComputation(
         arg1_important_arg="test2",
         arg2_compute_time=dt.timedelta(seconds=0),
         arg3_result_size=1024 * 1024,

@@ -76,6 +76,9 @@ class CacheItem[ItemID: (Path, I_AbstractItemID)](DC_CacheItem[ItemID]):
         """Age of the last access in hours"""
         return (dt.datetime.now() - self.last_access_time).total_seconds() / 60 / 60
 
+    def get_history_of_accesses(self) -> list[dt.datetime]:
+        return self._cache_manager._db.get_accesses(self.item_key)
+
 
 class AbstractCacheManager[ItemID: (Path, I_AbstractItemID)]:
     """
