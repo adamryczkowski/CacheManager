@@ -214,7 +214,7 @@ class SomeHeavyComputation(I_ItemProducer):
 # We will use the `SomeHeavyComputation` class constructor directly in place of the `json_wrap_promise` or `pickle_wrap_promise` functions.
 ----
 
-TIP: NB Code above has `# @overrides` commented out.I personally recommend to add `from overrides import overrides` into your project and have the method overrides being verified at runtime by this excellent library!
+TIP: Code above has `# @overrides` commented out. I personally recommend to add `from overrides import overrides` into your project and have the method overrides being verified at runtime by this excellent library!
 
 === `item_key`
 

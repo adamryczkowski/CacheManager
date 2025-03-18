@@ -8,9 +8,14 @@ from humanize import naturaldelta, naturalsize
 from overrides import overrides
 from pydantic import BaseModel, TypeAdapter
 
-from . import I_AbstractItemID
 from .abstract_cache_manager import AbstractCacheManager
-from .ifaces import ModelCacheManagerConfig, I_CacheStorageModify, I_StorageKeyGenerator
+from .ifaces import (
+    ModelCacheManagerConfig,
+    I_CacheStorageModify,
+    I_StorageKeyGenerator,
+    I_AbstractItemID,
+    ItemID,
+)
 from .object_cache import ObjectCache, I_MockItemProducer
 from .sqlite_settings_manager import SQLitePersistentDB
 
@@ -23,7 +28,7 @@ class MockObject(BaseModel):
         return self.size
 
 
-class MockCacheStorage_Path(I_CacheStorageModify[Path]):
+class MockCacheStorage_Path(I_CacheStorageModify):
     """This mock stores only hashes and fake "lengths" of items. Otherwise, it is fine."""
 
     _stored_objects: dict[Path, MockObject]
@@ -42,7 +47,7 @@ class MockCacheStorage_Path(I_CacheStorageModify[Path]):
             yield obj
 
     @overrides
-    def remove_item(self, item_storage_key: Path) -> bool:
+    def remove_item(self, item_storage_key: ItemID) -> bool:
         if item_storage_key in self._stored_objects:
             del self._stored_objects[item_storage_key]
             return True
@@ -50,7 +55,7 @@ class MockCacheStorage_Path(I_CacheStorageModify[Path]):
             return False
 
     @overrides
-    def load_item(self, item_storage_key: Path) -> bytes:
+    def load_item(self, item_storage_key: ItemID) -> bytes:
         # We are mocking the storage by returning the key itself with appended "data" string
 
         assert item_storage_key in self._stored_objects
@@ -59,10 +64,11 @@ class MockCacheStorage_Path(I_CacheStorageModify[Path]):
         return self._stored_objects[item_storage_key]
 
     @overrides
-    def save_item(self, object: bytes, item_storage_key: Path):
-        assert isinstance(object, bytes)
+    def save_item(self, item: bytes, item_storage_key: ItemID):
+        assert isinstance(item_storage_key, Path)
+        assert isinstance(item, bytes)
         assert item_storage_key not in self._stored_objects
-        ans = TypeAdapter(MockObject).validate_json(object.decode())
+        ans = TypeAdapter(MockObject).validate_json(item.decode())
         self._stored_objects[item_storage_key] = ans
 
     @property
@@ -78,11 +84,12 @@ class MockCacheStorage_Path(I_CacheStorageModify[Path]):
         return "Mock storage"
 
     @overrides
-    def calculate_hash(self, item_storage_key: Path) -> Optional[EntityHash]:
+    def calculate_hash(self, item_storage_key: ItemID) -> Optional[EntityHash]:
+        assert isinstance(item_storage_key, Path)
         return self._stored_objects[item_storage_key].hash
 
     @overrides
-    def does_item_exists(self, item_storage_key: Path) -> bool:
+    def does_item_exists(self, item_storage_key: ItemID) -> bool:
         return item_storage_key in self._stored_objects
 
     @overrides
@@ -90,11 +97,15 @@ class MockCacheStorage_Path(I_CacheStorageModify[Path]):
         pass
 
     @overrides
-    def make_absolute_item_storage_key(self, item_storage_key: Path) -> Path:
+    def make_absolute_item_storage_key(self, item_storage_key: ItemID) -> ItemID:
         return item_storage_key
 
+    @overrides
+    def item_size(self, item_storage_key: ItemID) -> int:
+        return self._stored_objects[item_storage_key].size
 
-class MockStorageKeyGenerator_Path(BaseModel, I_StorageKeyGenerator[Path]):
+
+class MockStorageKeyGenerator_Path(BaseModel, I_StorageKeyGenerator):
     prefix: Path = Path()
 
     def generate_item_storage_key(self, item_key: EntityHash) -> Path:
@@ -165,13 +176,13 @@ def generate_mock_cache_Path(
     db_filename: Path,
     total_space: float,
     initial_config: ModelCacheManagerConfig = None,
-) -> tuple[ObjectCache[Path], MockCacheStorage_Path]:
+) -> tuple[ObjectCache, MockCacheStorage_Path]:
     db = SQLitePersistentDB(db_filename, initial_config=initial_config)
     storage = MockCacheStorage_Path(total_space=total_space)
 
-    abs_cache = AbstractCacheManager[Path](db, storage)
+    abs_cache = AbstractCacheManager(db, storage)
     storage_key_generator = MockStorageKeyGenerator_Path()
-    cache = ObjectCache[Path](
+    cache = ObjectCache(
         storage=storage,
         cache_manager=abs_cache,
         storage_key_generator=storage_key_generator,
@@ -182,8 +193,8 @@ def generate_mock_cache_Path(
 
 
 def generate_mock_cache_view(
-    file_cache: ObjectCache[Path], file_prefix: Path = Path()
-) -> ObjectCache[Path]:
+    file_cache: ObjectCache, file_prefix: Path = Path()
+) -> ObjectCache:
     storage_key_generator = MockStorageKeyGenerator_Path(prefix=file_prefix)
 
     cache = ObjectCache(

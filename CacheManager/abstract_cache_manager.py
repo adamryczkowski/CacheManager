@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import datetime as dt
 import heapq
-from pathlib import Path
 from typing import Iterator, Optional
 
 from EntityHash import EntityHash
@@ -11,33 +10,31 @@ from pydantic import PositiveFloat
 from .ifaces import (
     ModelCacheManagerConfig,
     I_PersistentDB,
-    I_AbstractItemID,
     I_CacheStorageRead,
     DC_CacheItem,
+    DC_StoredItem,
+    ItemID,
 )
 
 
-class CacheItem[ItemID: (Path, I_AbstractItemID)](DC_CacheItem[ItemID]):
-    _cache_manager: AbstractCacheManager[ItemID]
+class CacheItem(DC_CacheItem):
+    _cache_manager: AbstractCacheManager
 
     def __init__(
         self,
+        *,
         item_key: EntityHash,
-        item_storage_key: ItemID,
-        hash: Optional[EntityHash],
         compute_time: dt.timedelta,
-        filesize: PositiveFloat,
         weight: PositiveFloat,
-        cache_manager: AbstractCacheManager[ItemID],
+        stored_items: dict[ItemID, DC_StoredItem],
+        cache_manager: AbstractCacheManager,
     ):
         assert isinstance(cache_manager, AbstractCacheManager)
         super().__init__(
             item_key=item_key,
-            item_storage_key=item_storage_key,
-            hash=hash,
             compute_time=compute_time,
-            filesize=filesize,
             weight=weight,
+            stored_items=stored_items,
         )
         self._cache_manager = cache_manager
 
@@ -47,40 +44,55 @@ class CacheItem[ItemID: (Path, I_AbstractItemID)](DC_CacheItem[ItemID]):
 
     def verify_hash(self) -> bool:
         # noinspection PyBroadException
-        if not self.exists:
-            raise ValueError(
-                f"Item {self.item_storage_key} does not exist in the cache."
-            )
-        try:
-            hash_on_disk = self._cache_manager.storage_iface.calculate_hash(
-                self.item_storage_key
-            )
-            if hash_on_disk is None:
-                return True
-        except Exception as _:
-            return False
-        return hash_on_disk == self.hash
+        stored_item: DC_StoredItem
+        for stored_item in self.stored_items.values():
+            if not self._cache_manager.storage.does_item_exists(
+                stored_item.item_store_key
+            ):
+                raise ValueError(
+                    f"Item {stored_item.pretty_store_key} does not exist in the cache."
+                )
+            if item_store_hash := stored_item.hash is not None:
+                try:
+                    hash_on_disk = self._cache_manager.storage.calculate_hash(
+                        stored_item.item_store_key
+                    )
+                    if item_store_hash != hash_on_disk:
+                        return False
+                except Exception as _:  # pylint: disable=broad-exception-caught
+                    return False
+        return True
 
     @property
     def exists(self) -> bool:
-        return self._cache_manager.storage_iface.does_item_exists(self.item_storage_key)
+        key: ItemID
+        for key in self.stored_items.keys():
+            if not self._cache_manager.storage.does_item_exists(key):
+                return False
+        return True
 
     def add_access_to_object(self, when: dt.datetime = dt.datetime.now()):
         self._cache_manager.add_access_to_item(self.item_key, when)
 
-    def __lt__(self, other: CacheItem[ItemID]) -> bool:
+    def __lt__(self, other: CacheItem) -> bool:
         return self.utility < other.utility
 
     @property
     def age(self) -> float:
         """Age of the last access in hours"""
-        return (dt.datetime.now() - self.last_access_time).total_seconds() / 60 / 60
+        if (last_access_time := self.last_access_time) is None:
+            raise RuntimeError(f"Item {self.pretty_key} has never been accessed")
+        return (dt.datetime.now() - last_access_time).total_seconds() / 60 / 60
 
     def get_history_of_accesses(self) -> list[dt.datetime]:
-        return self._cache_manager._db.get_accesses(self.item_key)
+        return self._cache_manager.metadata_database.get_accesses(self.item_key)
+
+    @property
+    def last_access_time(self) -> Optional[dt.datetime]:
+        return self._cache_manager.metadata_database.get_last_access(self.item_key)
 
 
-class AbstractCacheManager[ItemID: (Path, I_AbstractItemID)]:
+class AbstractCacheManager:
     """
     Class that manages persistence of items in the abstract cache.
 
@@ -99,10 +111,10 @@ class AbstractCacheManager[ItemID: (Path, I_AbstractItemID)]:
     Otherwise, prunning algorithm will be of sudoku complexity.
     """
 
-    _db: I_PersistentDB[ItemID]
-    _storage: I_CacheStorageRead[ItemID]
+    _db: I_PersistentDB
+    _storage: I_CacheStorageRead
 
-    def __init__(self, db: I_PersistentDB[ItemID], storage: I_CacheStorageRead[ItemID]):
+    def __init__(self, db: I_PersistentDB, storage: I_CacheStorageRead):
         assert db is not None
         assert isinstance(db, I_PersistentDB)
         assert storage is not None
@@ -110,6 +122,10 @@ class AbstractCacheManager[ItemID: (Path, I_AbstractItemID)]:
 
         self._db = db
         self._storage = storage
+
+    @property
+    def metadata_database(self) -> I_PersistentDB:
+        return self._db
 
     @property
     def free_space(self) -> float:
@@ -121,7 +137,7 @@ class AbstractCacheManager[ItemID: (Path, I_AbstractItemID)]:
         return self._db.config
 
     @property
-    def storage_iface(self) -> I_CacheStorageRead[ItemID]:
+    def storage(self) -> I_CacheStorageRead:
         return self._storage
 
     def _calculate_disk_cost_of_new_item(
@@ -189,17 +205,13 @@ class AbstractCacheManager[ItemID: (Path, I_AbstractItemID)]:
         utility = positive_utility + negative_cost
         return utility
 
-    def iterate_cache_items(
-        self, OnlyExisting: bool = True
-    ) -> Iterator[CacheItem[ItemID]]:
+    def iterate_cache_items(self, OnlyExisting: bool = True) -> Iterator[CacheItem]:
         for db_item in self._db.iterate_items():
             item = self._enrich_cacheitem(db_item)
             if item.exists or not OnlyExisting:
                 yield item
 
-    def prunning_iterator(
-        self, remove_metadata: bool = False
-    ) -> Iterator[CacheItem[ItemID]]:
+    def prunning_iterator(self, remove_metadata: bool = False) -> Iterator[CacheItem]:
         """
         Iterates over all the item that needs to be removed.
         :param remove_metadata: removes item's metadata, incl. access times.
@@ -221,43 +233,36 @@ class AbstractCacheManager[ItemID: (Path, I_AbstractItemID)]:
             if remove_metadata:
                 self._db.remove_item(item.item_key)
 
-    def update_item(self, new_item: DC_CacheItem[ItemID]):
+    def update_item(self, new_item: DC_CacheItem):
         """Replace already existing cache item. Basically ensure the properties hold"""
         old_item = self.get_item_by_key(new_item.item_key)
         if old_item is None:
             raise KeyError(f"Item {new_item.item_key} does not exist")
-        if old_item.item_storage_key != new_item.item_storage_key:
-            raise ValueError(f"Item {new_item.item_key} has different storage key")
-        if (
-            old_item.hash is not None
-            and new_item.hash is not None
-            and old_item.hash != new_item.hash
-        ):
+
+        if new_item.stored_items != old_item.stored_items:
+            raise ValueError(
+                f"Two cache items have different storage keys: {old_item.pretty_storage_keys} vs {new_item.pretty_storage_keys}. Cannot update in this case out of caution."
+            )
+
+        if old_item.item_hash != new_item.item_hash:
             raise ValueError(f"Item {new_item.item_key} has different hash")
-        if old_item.hash is None:
-            hash = new_item.hash
-        else:
-            hash = old_item.hash
 
         compute_time = max(
             old_item.compute_time, new_item.compute_time
         )  # The most pessimistic measure
-        filesize = max(old_item.filesize, new_item.filesize)
         weight = new_item.weight
         self._db.remove_item(old_item.item_key, remove_history=False)
         item = DC_CacheItem(
             item_key=old_item.item_key,
-            item_storage_key=old_item.item_storage_key,
-            hash=hash,
+            stored_items=old_item.stored_items,
             compute_time=compute_time,
-            filesize=filesize,
             weight=weight,
         )
         self._db.add_item(item)
         self._db.add_access_to_item(item.item_key, dt.datetime.now())
         self._db.commit()
 
-    def add_item_unconditionally(self, item: DC_CacheItem[ItemID]) -> CacheItem[ItemID]:
+    def add_item_unconditionally(self, item: DC_CacheItem) -> CacheItem:
         """
         Store the object in the cache without questioning its utility.
         """
@@ -283,13 +288,11 @@ class AbstractCacheManager[ItemID: (Path, I_AbstractItemID)]:
         self._db.add_access_to_item(item_key, when)
         self._db.commit()
 
-    def _enrich_cacheitem(self, item: DC_CacheItem[ItemID]) -> CacheItem[ItemID]:
+    def _enrich_cacheitem(self, item: DC_CacheItem) -> CacheItem:
         ans_item = CacheItem(
             item_key=item.item_key,
-            item_storage_key=item.item_storage_key,
-            hash=item.hash,
+            stored_items=item.stored_items,
             compute_time=item.compute_time,
-            filesize=item.filesize,
             weight=item.weight,
             cache_manager=self,
         )
@@ -306,20 +309,17 @@ class AbstractCacheManager[ItemID: (Path, I_AbstractItemID)]:
 
     def make_Item(
         self,
+        *,
         item_key: EntityHash,
-        item_storage_key: ItemID,
-        hash: Optional[EntityHash],
         compute_time: dt.timedelta,
-        filesize: PositiveFloat,
         weight: PositiveFloat,
-    ) -> CacheItem[ItemID]:
+        stored_items: dict[ItemID, DC_StoredItem],
+    ) -> CacheItem:
         return CacheItem(
             cache_manager=self,
             item_key=item_key,
-            item_storage_key=item_storage_key,
-            hash=hash,
+            stored_items=stored_items,
             compute_time=compute_time,
-            filesize=filesize,
             weight=weight,
         )
 

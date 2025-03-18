@@ -2,21 +2,27 @@
 
 import datetime as dt
 import sqlite3
+from builtins import issubclass
 from pathlib import Path
 from typing import Optional, Iterator
-from overrides import overrides
 
 from EntityHash import EntityHash
+from overrides import overrides
+from pip._internal.utils.filesystem import file_size
+
 from .ifaces import (
     ModelCacheManagerConfig,
     I_PersistentDB,
     DC_CacheItem,
-    I_AbstractItemID,
+    DC_StoredItem,
+    ItemID,
 )
+
+
 # from .cache_item import CacheItem
 
 
-class SQLitePersistentDB[ItemID: (Path, I_AbstractItemID)](I_PersistentDB):
+class SQLitePersistentDB(I_PersistentDB):
     """
     The manager maintains a database of metadata as SQLite database using three tables:
     # Objects
@@ -36,15 +42,20 @@ class SQLitePersistentDB[ItemID: (Path, I_AbstractItemID)](I_PersistentDB):
 
     database_path: Path
     connection: sqlite3.Connection
+    itemID_type: type[ItemID]
 
     def __init__(
-        self, database_path: Path, initial_config: ModelCacheManagerConfig = None
+        self,
+        database_path: Path,
+        initial_config: ModelCacheManagerConfig = None,
+        itemID_type: type[ItemID] = Path,
     ):
         self.database_path = database_path
         self._make_sure_db_exists()
         if initial_config is None:
             initial_config = ModelCacheManagerConfig()
         self._ensure_tables(initial_config)
+        self.itemID_type = itemID_type
 
     def _make_sure_db_exists(self):
         if self.database_path.exists():
@@ -65,18 +76,23 @@ class SQLitePersistentDB[ItemID: (Path, I_AbstractItemID)](I_PersistentDB):
         self.connection.execute("""
         CREATE TABLE IF NOT EXISTS Objects (
             item_key TEXT PRIMARY KEY,
-            hash TEXT KEY,
-            item_storage_key TEXT,
             compute_time REAL,
-            weight REAL,
+            weight REAL
+        )
+        """)
+        self.connection.execute(
+            "CREATE INDEX IF NOT EXISTS idx_filename ON Objects (hash)"
+        )
+        self.connection.execute("""
+        CREATE TABLE IF NOT EXISTS StoredItems (
+            item_storage_key TEXT PRIMARY KEY,
+            item_key TEXT,
+            hash TEXT,
             filesize REAL
         )
         """)
         self.connection.execute(
-            "CREATE INDEX IF NOT EXISTS idx_filename ON Objects (item_storage_key)"
-        )
-        self.connection.execute(
-            "CREATE INDEX IF NOT EXISTS idx_filename ON Objects (hash)"
+            "CREATE INDEX IF NOT EXISTS item_key ON Objects (item_key, tag)"
         )
         self.connection.execute("""
         CREATE TABLE IF NOT EXISTS Accesses (
@@ -131,78 +147,90 @@ class SQLitePersistentDB[ItemID: (Path, I_AbstractItemID)](I_PersistentDB):
 
     @overrides
     def add_item(self, item: DC_CacheItem):
-        if item.hash is None:
-            item_hash = ""
-        else:
-            item_hash = item.hash.as_base64
         self.connection.execute(
-            "INSERT INTO Objects (item_key, item_storage_key, hash, compute_time, weight, filesize) VALUES (?, ?, ?, ?, ?, ?)",
+            "INSERT INTO Objects (item_key,compute_time, weight) VALUES (?, ?, ?)",
             (
                 item.item_key.as_base64,
-                str(item.serialized_filename),
-                item_hash,
-                str(item.compute_time),
-                str(item.weight),
-                str(item.filesize),
+                item.compute_time.total_seconds(),
+                item.weight,
             ),
         )
+
+        for stored_item in item.stored_items.values():
+            if issubclass(self.itemID_type, Path):
+                item_storage_key_str = str(stored_item.item_store_key)
+            else:
+                item_storage_key_str = stored_item.item_store_key.serialize()
+            self.connection.execute(
+                "INSERT INTO StoredItems (item_key, item_storage_key, hash, filesize) VALUES (?, ?, ?, ?)",
+                (
+                    item.item_key.as_base64,
+                    item_storage_key_str,
+                    stored_item.hash.as_base64,
+                    stored_item.filesize,
+                ),
+            )
+
+    @overrides
+    def get_stored_items(self, item_key: EntityHash) -> dict[ItemID, DC_StoredItem]:
+        cursor = self.connection.execute(
+            "SELECT item_storage_key, hash, filesize FROM StoredItems WHERE item_key=?",
+            (item_key.as_base64,),
+        )
+        ans = {}
+        for row in cursor.fetchall():
+            item_storage_key_str, hash, filesize = row
+            if issubclass(self.itemID_type, Path):
+                item_storage_key: ItemID = Path(item_storage_key_str)
+            else:
+                item_storage_key: ItemID = self.itemID_type.Unserialize(
+                    item_storage_key_str
+                )
+            item = DC_StoredItem(
+                filesize=file_size, item_store_key=item_storage_key, hash=hash
+            )
+
+            ans[item_storage_key] = item
+
+        return ans
 
     @overrides
     def get_item_by_key(self, item_key: EntityHash) -> Optional[DC_CacheItem]:
         cursor = self.connection.execute(
-            "SELECT item_storage_key, hash, compute_time, weight, filesize FROM Objects WHERE item_key=?",
+            "SELECT compute_time, weight FROM Objects WHERE item_key=?",
             (item_key.as_base64,),
         )
         row = cursor.fetchone()
         if row is None:
             return None
-        item_storage_key, item_hash, compute_time, weight, filesize = row
+        compute_time, weight = row
 
-        if self.is_ItemID_Path():
-            item_storage_key = Path(item_storage_key)
-        else:
-            item_storage_key = I_AbstractItemID.Unserialize(item_storage_key)
-        if item_hash != "":
-            item_hash = EntityHash.FromBase64(item_hash)
-        else:
-            item_hash = None
+        stored_items = self.get_stored_items(item_key)
 
         return DC_CacheItem(
             item_key=item_key,
-            item_storage_key=item_storage_key,
-            hash=item_hash,
-            compute_time=compute_time,
-            filesize=filesize,
+            stored_items=stored_items,
+            compute_time=dt.timedelta(seconds=compute_time),
             weight=weight,
         )
 
     @overrides
     def get_item_by_storage_key(self, storage_key: ItemID) -> Optional[DC_CacheItem]:
+        assert storage_key is self.itemID_type
         if isinstance(storage_key, Path):
             filename_str = str(storage_key)
         else:
             filename_str = storage_key.serialize()
         cursor = self.connection.execute(
-            "SELECT item_key, item_storage_key, hash,compute_time, weight, filesize FROM Objects WHERE item_storage_key=?",
+            "SELECT item_key FROM StoredItems WHERE item_storage_key=?",
             (filename_str,),
         )
         row = cursor.fetchone()
         if row is None:
             return None
-        item_key, item_storage_key, item_hash, compute_time, weight, filesize = row
-        if item_hash == "":
-            item_hash = None
-        else:
-            item_hash = EntityHash.FromBase64(item_hash)
-        item_key = EntityHash.FromBase64(item_key)
-        return DC_CacheItem(
-            item_key=item_key,
-            item_storage_key=Path(storage_key) / self.database_path,
-            hash=item_hash,
-            compute_time=compute_time,
-            weight=weight,
-            filesize=filesize,
-        )
+        item_key_str = row[0]
+        item_key = EntityHash.FromBase64(item_key_str)
+        return self.get_item_by_key(item_key)
 
     @overrides
     def add_access_to_item(self, item_key: EntityHash, timestamp: dt.datetime):
@@ -230,14 +258,20 @@ class SQLitePersistentDB[ItemID: (Path, I_AbstractItemID)](I_PersistentDB):
             return dt.datetime.fromtimestamp(row[0])
 
     @overrides
-    def remove_item(self, item_key: EntityHash, remove_history: bool = True):
+    def remove_item(self, item_key: EntityHash, remove_history: bool = True) -> True:
         self.connection.execute(
             "DELETE FROM Objects WHERE item_key=?", (item_key.as_base64,)
         )
+
+        self.connection.execute(
+            "DELETE FROM StoredItems WHERE item_key=?", (item_key.as_base64,)
+        )
+
         if remove_history:
             self.connection.execute(
                 "DELETE FROM Accesses WHERE item_key=?", (item_key.as_base64,)
             )
+        return True
 
     @overrides
     def commit(self):
@@ -282,22 +316,15 @@ class SQLitePersistentDB[ItemID: (Path, I_AbstractItemID)](I_PersistentDB):
     @overrides
     def iterate_items(self) -> Iterator[DC_CacheItem]:
         cursor = self.connection.execute(
-            "SELECT item_key, item_storage_key, hash, compute_time, weight, filesize FROM Objects"
+            "SELECT item_key, compute_time, weight FROM Objects"
         )
-        for item_key, item_storage_key, hash, compute_time, weight, filesize in cursor:
-            hash = EntityHash.FromBase64(hash)
+        for item_key, compute_time, weight in cursor:
             item_key = EntityHash.FromBase64(item_key)
-            if self.is_ItemID_Path():
-                item_storage_key = Path(item_storage_key)
-            else:
-                item_storage_key = I_AbstractItemID.Unserialize(item_storage_key)
             ans = DC_CacheItem(
-                item_key=hash,
-                item_storage_key=item_storage_key,
-                hash=hash,
-                compute_time=compute_time,
+                item_key=item_key,
+                compute_time=dt.timedelta(seconds=compute_time),
                 weight=weight,
-                filesize=filesize,
+                stored_items=self.get_stored_items(item_key),
             )
             yield ans
 
@@ -312,3 +339,19 @@ class SQLitePersistentDB[ItemID: (Path, I_AbstractItemID)](I_PersistentDB):
     def close(self):
         if self.connection is not None:
             self.connection.close()
+
+    @overrides
+    def add_file_to_item(self, item_key: EntityHash, storage_key: ItemID):
+        # Adds item to the StoredItems table
+        assert item_key is not None
+        assert storage_key is not None
+
+        if isinstance(storage_key, Path):
+            storage_key = str(storage_key)
+        else:
+            storage_key = storage_key.serialize()
+
+        self.connection.execute(
+            "INSERT INTO StoredItems (item_key, item_storage_key) VALUES (?, ?)",
+            (item_key.as_base64, storage_key),
+        )

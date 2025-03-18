@@ -12,6 +12,7 @@ pydantic = "^2.10.0"
 EntityHash = {git = "https://github.com/adamryczkowski/EntityHash.git", rev = "master"}
 humanize = "^4.12.0"
 overrides = "^7.7.0"
+pylint = "^3.3.5"
 
 [poetry.group.dev.dependencies]
 pytest = "^8.3.4"
@@ -20,3 +21,12 @@ pytest = "^8.3.4"
 [build-system]
 requires = ["poetry-core"]
 build-backend = "poetry.core.masonry.api"
+
+[tool.pyright]
+venvPath = "."
+venv = "/home/adam/.cache/pypoetry/virtualenvs/cachemanager-iWnPA1xQ-py3.12"
+pythonVersion = "3.12"
+pythonPlatform = "Linux"
+
+[tool.pylint.main]
+disable = ["invalid-name", "bad-inline-option", "consider-using-augmented-assign", "deprecated-pragma", "file-ignored", "locally-disabled", "prefer-typing-namedtuple", "raw-checker-failed", "suppressed-message", "use-implicit-booleaness-not-comparison-to-string", "use-implicit-booleaness-not-comparison-to-zero", "use-symbolic-message-instead", "useless-suppression"]

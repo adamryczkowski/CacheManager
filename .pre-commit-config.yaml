@@ -84,6 +84,23 @@ repos:
           - high
           - --confidence-level
           - medium
+  - repo: https://github.com/RobertCraigie/pyright-python
+    rev: v1.1.396
+    hooks:
+      - id: pyright
+#  - repo: local
+#    hooks:
+#      - id: pylint
+#        name: pylint
+#        entry: pylint
+#        language: system
+#        types: [python]
+#        require_serial: true
+#        args:
+#          [
+#            "-rn",  # Only display messages
+#            "-sn",  # Don't display the score
+#          ]
 
   # YAML
   - repo: https://github.com/lyz-code/yamlfix  # Formatter
@@ -114,3 +131,11 @@ repos:
         args: [--allow-leading-whitespace]
         exclude: ^\.gitignore$  # Ignoring the main .gitignore file for now.
         # Without comments this will re-shuffle the order of all the entries.
+
+  # Markdown
+  - repo: https://github.com/hukkin/mdformat
+    rev: 0.7.22  # Use the ref you want to point at
+    hooks:
+      - id: mdformat
+        # Optionally add plugins
+        additional_dependencies: [mdformat-gfm, mdformat-black, mdformat-ruff]

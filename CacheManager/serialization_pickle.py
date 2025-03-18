@@ -1,13 +1,11 @@
 import pickle
-from pathlib import Path
 from typing import Any, Optional
 
 from EntityHash import EntityHash
 from overrides import overrides
 
-from . import I_AbstractItemID
 from .object_cache import I_ItemProducer
-from .ifaces import ProducerCallback
+from .ifaces import ProducerCallback, ItemID
 
 
 class I_PickledItemPromise(I_ItemProducer):
@@ -35,7 +33,7 @@ class I_PickledItemPromise(I_ItemProducer):
         return bytes
 
     @overrides
-    def propose_item_storage_key(self) -> Optional[Path | I_AbstractItemID]:
+    def propose_item_storage_key(self) -> Optional[ItemID]:
         return None
 
 

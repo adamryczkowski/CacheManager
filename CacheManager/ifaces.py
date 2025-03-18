@@ -1,13 +1,14 @@
 from __future__ import annotations
 import datetime as dt
+import hashlib
 from abc import ABC, abstractmethod
 from enum import Enum
 from pathlib import Path
-from typing import Optional, Iterator, Protocol, Any
+from typing import Optional, Iterator, Protocol, Any, Union
 
 from EntityHash import EntityHash
 from humanize import naturalsize, naturaldelta
-from pydantic import BaseModel, PositiveFloat
+from pydantic import BaseModel, PositiveInt, PositiveFloat
 
 from .pretty_path import shorten_path
 
@@ -26,6 +27,9 @@ class I_AbstractItemID(ABC, BaseModel):
     @staticmethod
     @abstractmethod
     def Unserialize(string: str) -> I_AbstractItemID: ...
+
+
+ItemID = Union[Path, I_AbstractItemID]
 
 
 class ModelCacheOptionName(Enum):
@@ -52,27 +56,47 @@ class ModelCacheManagerConfig(BaseModel):
     marginal_relative_utility_at_1GB: float = 1  # Shape parameter, equal to minus the derivative of the utility function at 1GB of free space divided by the utility at 1GB of free space. E.g. 2.0 means that the cost of storing the cache item at 1GB free space is rising 2 times faster than the cost of storing the cache item at 1GB of free space.
 
 
-class DC_CacheItem[ItemID: (Path, I_AbstractItemID)](
-    BaseModel, ABC
-):  # DC stands for DataClass - a glorified struct
-    item_key: EntityHash  # A key with which it will be acquired from the cache
-    hash: Optional[EntityHash]  # A hash of the item to check for consistency
-    item_storage_key: ItemID  # Path or any other type of item ID in future.
-    compute_time: dt.timedelta  # in minutes
-    filesize: PositiveFloat  # in bytes
-    weight: PositiveFloat
+class DC_StoredItem(BaseModel, ABC):
+    filesize: PositiveInt  # in bytes
+    item_store_key: ItemID
+    hash: EntityHash
 
-    # last_access_time: dt.datetime
+    def __init__(
+        self,
+        filesize: PositiveInt,
+        item_store_key: ItemID,
+        hash: EntityHash,
+    ):
+        super().__init__(filesize=filesize, item_store_key=item_store_key, hash=hash)
+
+    @property
+    def serialized_filename(self) -> str:
+        if isinstance(self.item_store_key, Path):
+            return str(self.item_store_key)
+        else:
+            return self.item_store_key.serialize()
+
+    @property
+    def pretty_size(self) -> str:
+        return naturalsize(self.filesize)
+
+    @property
+    def pretty_store_key(self) -> str:
+        if isinstance(self.item_store_key, Path):
+            return shorten_path(self.item_store_key, 30 + len(self.item_store_key.name))
+        else:
+            return self.item_store_key.pretty_shorten(50)
+
+
+class DC_CacheItem(BaseModel, ABC):  # DC stands for DataClass - a glorified struct
+    item_key: EntityHash  # A key with which it will be acquired from the cache
+    compute_time: dt.timedelta  # in minutes
+    weight: PositiveFloat
+    stored_items: dict[ItemID, DC_StoredItem]
 
     def __str__(self):
         ans = ""
-        if isinstance(self.item_storage_key, Path):
-            file_len = len(self.item_storage_key.name)
-            ans += f"{shorten_path(self.item_storage_key.absolute(), 30 + file_len)}:\n"
-        else:
-            ans += f"storage key={self.item_storage_key.pretty_shorten(50)}:\n"
         ans += f" item_key={self.pretty_key}\n"
-        ans += f" hash={self.hash}\n"
         ans += f" object size={self.pretty_size}\n"
         ans += f" compute time={self.pretty_compute_time}\n"
         # ans += f" last accessed {naturaldelta(dt.datetime.now() - self.last_access_time, months=False, minimum_unit="seconds")} ago\n"
@@ -85,15 +109,15 @@ class DC_CacheItem[ItemID: (Path, I_AbstractItemID)](
         return self.__str__()
 
     @property
-    def serialized_filename(self) -> str:
-        if isinstance(self.item_storage_key, Path):
-            return str(self.item_storage_key)
-        else:
-            return self.item_storage_key.serialize()
-
-    @property
     def pretty_size(self) -> str:
         return naturalsize(self.filesize)
+
+    @property
+    def filesize(self) -> int:
+        filesize = 0
+        for item in self.stored_items.values():
+            filesize += item.filesize
+        return filesize
 
     @property
     def pretty_compute_time(self) -> str:
@@ -109,25 +133,39 @@ class DC_CacheItem[ItemID: (Path, I_AbstractItemID)](
     def pretty_key(self) -> str:
         return self.item_key.as_base64[:10]
 
-    def __eq__(self, other: DC_CacheItem[ItemID]) -> bool:
+    @property
+    def pretty_storage_keys(self) -> str:
+        ans = []
+        for item in self.stored_items.values():
+            ans.append(item.pretty_store_key)
+        return ", ".join(ans)
+
+    @property
+    def item_hash(self) -> EntityHash:
+        keys = list(self.stored_items.keys())
+        keys.sort()
+        sha256 = hashlib.sha256()
+        for key in keys:
+            storage_item = self.stored_items[key]
+            sha256.update(storage_item.hash.as_bytes)
+        return EntityHash.FromHashlib(sha256)
+
+    def __eq__(self, other: Any) -> bool:
+        assert isinstance(other, DC_CacheItem)
         ans = self.item_key == other.item_key
         if __debug__:
-            if self.hash is not None and other.hash is not None:
-                assert (self.hash == other.hash) == ans
+            assert (self.item_hash == other.item_hash) == ans
         return ans
 
 
-class I_PersistentDB[ItemID: (Path, I_AbstractItemID)](ABC):
+class I_PersistentDB(ABC):
     """Class that abstracts away storage of persistent settings."""
-
-    def is_ItemID_Path(self) -> bool:
-        # # noinspection PyUnresolvedReferences
-        # return issubclass(self.__orig_class__.__args__[0], Path)
-        return True  # The code above relies on undefined behaviour and sometimes fails.
-        # This is a reason not to use generics in Python anymore.
 
     @abstractmethod
     def add_item(self, item: DC_CacheItem): ...
+
+    @abstractmethod
+    def add_file_to_item(self, item_key: EntityHash, storage_key: ItemID): ...
 
     @abstractmethod
     def add_access_to_item(self, item_key: EntityHash, timestamp: dt.datetime): ...
@@ -137,6 +175,9 @@ class I_PersistentDB[ItemID: (Path, I_AbstractItemID)](ABC):
 
     @abstractmethod
     def get_item_by_key(self, item_key: EntityHash) -> Optional[DC_CacheItem]: ...
+
+    @abstractmethod
+    def get_stored_items(self, item_key: EntityHash) -> dict[ItemID, DC_StoredItem]: ...
 
     @abstractmethod
     def get_item_by_storage_key(
@@ -150,7 +191,9 @@ class I_PersistentDB[ItemID: (Path, I_AbstractItemID)](ABC):
     def get_last_access(self, item_key: EntityHash) -> Optional[dt.datetime]: ...
 
     @abstractmethod
-    def remove_item(self, item_key: EntityHash, remove_history: bool = True): ...
+    def remove_item(self, item_key: EntityHash, remove_history: bool = True) -> bool:
+        """Returns True if operation was successful, False otherwise."""
+        ...
 
     @property
     @abstractmethod
@@ -169,7 +212,7 @@ class I_PersistentDB[ItemID: (Path, I_AbstractItemID)](ABC):
     def close(self): ...
 
 
-class I_CacheStorageRead[ItemID: (Path, I_AbstractItemID)](ABC):
+class I_CacheStorageRead(ABC):
     @property
     @abstractmethod
     def free_space(self) -> float: ...
@@ -196,10 +239,13 @@ class I_CacheStorageRead[ItemID: (Path, I_AbstractItemID)](ABC):
     @abstractmethod
     def close(self): ...
 
+    @abstractmethod
+    def item_size(self, item_storage_key: ItemID) -> int:
+        """Returns size of the item in bytes"""
+        ...
 
-class I_CacheStorageModify[ItemID: (Path, I_AbstractItemID)](
-    I_CacheStorageRead[ItemID]
-):
+
+class I_CacheStorageModify(I_CacheStorageRead):
     @abstractmethod
     def remove_item(self, item_storage_key: ItemID) -> bool:
         """True if removal succeeded, False otherwise."""
@@ -209,13 +255,13 @@ class I_CacheStorageModify[ItemID: (Path, I_AbstractItemID)](
     def load_item(self, item_storage_key: ItemID) -> bytes: ...
 
     @abstractmethod
-    def save_item(self, object: bytes, item_storage_key: ItemID): ...
+    def save_item(self, item: bytes, item_storage_key: ItemID): ...
 
     @abstractmethod
     def make_absolute_item_storage_key(self, item_storage_key: ItemID) -> ItemID: ...
 
 
-class I_StorageKeyGenerator[ItemID: (Path, I_AbstractItemID)](ABC):
+class I_StorageKeyGenerator(ABC):
     """
     Class that is responsible for naming new cache items.
     """

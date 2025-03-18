@@ -3,7 +3,6 @@ from __future__ import annotations
 import datetime as dt
 import heapq
 from abc import ABC, abstractmethod
-from pathlib import Path
 from typing import Any, Optional
 
 from EntityHash import EntityHash
@@ -11,17 +10,7 @@ from humanize import naturalsize
 
 from .abstract_cache_manager import AbstractCacheManager
 from .abstract_cache_manager import CacheItem
-from .ifaces import I_AbstractItemID, I_CacheStorageModify, I_StorageKeyGenerator
-
-# class ItemProducer(Protocol):
-#     def get_item_key(self) -> EntityHash: ...
-#
-#     def compute_item(self) -> Any: ...
-#
-#     def instantiate_item(self, data: bytes) -> Any: ...
-#
-#     @staticmethod
-#     def serialize_item(item: Any) -> bytes: ...
+from .ifaces import ItemID, I_CacheStorageModify, I_StorageKeyGenerator
 
 
 class I_ItemProducer(ABC):
@@ -36,16 +25,16 @@ class I_ItemProducer(ABC):
     def get_item_key(self) -> EntityHash: ...
 
     @abstractmethod
-    def compute_item(self) -> Any: ...
+    def compute_item(self) -> Any | tuple[Any, ItemID]: ...
 
     @abstractmethod
     def instantiate_item(self, data: bytes) -> Any: ...
 
     @abstractmethod
-    def serialize_item(item: Any) -> bytes: ...
+    def serialize_item(item: Any) -> bytes | list[bytes | ItemID]: ...
 
     @abstractmethod
-    def propose_item_storage_key(self) -> Optional[Path | I_AbstractItemID]: ...
+    def propose_item_storage_key(self) -> Optional[ItemID]: ...
 
 
 class I_MockItemProducer(I_ItemProducer):
@@ -54,20 +43,20 @@ class I_MockItemProducer(I_ItemProducer):
     def compute_time(self) -> dt.timedelta: ...
 
 
-class ObjectCache[ItemID: (Path, I_AbstractItemID)]:
+class ObjectCache:
     """
     This cache object is ready for use. It only requires a user-friendly factory function that will create this object
     """
 
-    _cache_manager: AbstractCacheManager[ItemID]
-    _storage: I_CacheStorageModify[ItemID]
+    _cache_manager: AbstractCacheManager
+    _storage: I_CacheStorageModify
     _storage_key_generator: I_StorageKeyGenerator
     _calculate_hash: bool
 
     def __init__(
         self,
-        storage: I_CacheStorageModify[ItemID],
-        cache_manager: AbstractCacheManager[ItemID],
+        storage: I_CacheStorageModify,
+        cache_manager: AbstractCacheManager,
         storage_key_generator: I_StorageKeyGenerator,
         calculate_hash: bool,
     ):
@@ -128,16 +117,16 @@ class ObjectCache[ItemID: (Path, I_AbstractItemID)]:
             )  # The end of not-predictable part of the computation
 
         if storage_key := object_factory.propose_item_storage_key() is None:
-            storage_key = self._storage_key_generator.generate_item_storage_key(
-                item_key
-            )
+            storage_key = {
+                self._storage_key_generator.generate_item_storage_key(item_key)
+            }
         if item is not None:
             # the cache has seen this item before. It can either be in the cache, or the item has been pruned.
             # Anyway, there is no point in calculating the hash again.
             new_item = self._cache_manager.make_Item(
                 item_key=item_key,
-                item_storage_key=storage_key,
-                hash=item.hash,
+                item_storage_keys=storage_key,
+                hashes=item.hashes,
                 compute_time=time2 - time1,
                 filesize=item.filesize,
                 weight=weight,
@@ -154,16 +143,28 @@ class ObjectCache[ItemID: (Path, I_AbstractItemID)]:
 
         object_bytes = object_factory.serialize_item(object)
         if isinstance(object_factory, I_MockItemProducer):
-            object_size = len(object)
+            object_size = len(
+                object
+            )  # Special case for mock objects. Maybe in future this will be a part of a regular API
+            # if we encounter a situation where size of the object is non-trivial to calculate.
         else:
-            object_size = len(object_bytes)
+            if not isinstance(object_bytes, list):
+                object_bytes = [object_bytes]
+            if isinstance(object_bytes, list):
+                object_size = 0
+                for item in object_bytes:
+                    if isinstance(item, bytes):
+                        object_size += len(item)
+                    else:
+                        assert isinstance(item, ItemID)
+                        object_size += self._storage.item_size(item)
 
         if new_item is None:
             # the cache has not seen this item before.
             new_item = self._cache_manager.make_Item(
                 item_key=item_key,
-                item_storage_key=storage_key,
-                hash=None,
+                item_storage_keys=storage_key,
+                hashes=None,
                 compute_time=time2 - time1,
                 filesize=object_size,
                 weight=weight,
@@ -226,8 +227,8 @@ class ObjectCache[ItemID: (Path, I_AbstractItemID)]:
             )
 
     def print_contents(self):
-        item_list: list[CacheItem[ItemID]] = []
-        item: CacheItem[ItemID]
+        item_list: list[CacheItem] = []
+        item: CacheItem
         for item in self._cache_manager.iterate_cache_items():
             heapq.heappush(item_list, item)
 
@@ -240,7 +241,7 @@ class ObjectCache[ItemID: (Path, I_AbstractItemID)]:
     ) -> tuple[float, int]:
         size = 0
         count = 0
-        item: CacheItem[ItemID]
+        item: CacheItem
         for item in self._cache_manager.iterate_cache_items(False):
             if count_existing is None or (count_existing == item.exists):
                 size += int(item.filesize)
@@ -256,7 +257,7 @@ class ObjectCache[ItemID: (Path, I_AbstractItemID)]:
         return ans
 
     @property
-    def storage(self) -> I_CacheStorageModify[ItemID]:
+    def storage(self) -> I_CacheStorageModify:
         return self._storage
 
     def close(self):

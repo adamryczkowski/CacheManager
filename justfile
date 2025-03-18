@@ -44,3 +44,4 @@ check-all:
   #!/usr/bin/env bash
   set -euo pipefail
   pre-commit run --all-files
+  pylint CacheManager

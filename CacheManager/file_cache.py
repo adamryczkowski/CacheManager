@@ -1,15 +1,19 @@
+import os
+from EntityHash import EntityHash
+from overrides import overrides
+from pathlib import Path
+from pydantic import BaseModel
 from typing import Optional
 
-from EntityHash import EntityHash
-
-from .ifaces import ModelCacheManagerConfig, I_CacheStorageModify, I_StorageKeyGenerator
-from .object_cache import ObjectCache
 from .abstract_cache_manager import AbstractCacheManager
+from .ifaces import (
+    ModelCacheManagerConfig,
+    I_CacheStorageModify,
+    I_StorageKeyGenerator,
+    ItemID,
+)
+from .object_cache import ObjectCache
 from .sqlite_settings_manager import SQLitePersistentDB
-from pathlib import Path
-from overrides import overrides
-from pydantic import BaseModel
-import os
 
 
 class FileCacheStorage(I_CacheStorageModify):
@@ -20,31 +24,34 @@ class FileCacheStorage(I_CacheStorageModify):
         self._cache_root_path = cache_root_path
 
     @overrides
-    def remove_item(self, item_storage_key: Path) -> bool:
+    def remove_item(self, item_storage_key: ItemID) -> bool:
         item_storage_key = self.make_absolute_item_storage_key(item_storage_key)
+        assert isinstance(item_storage_key, Path)
         try:
             item_storage_key.unlink()
-        except Exception as _:
+        except Exception as _:  # pylint: disable=broad-exception-caught
             return False
         return True
 
     @overrides
-    def load_item(self, item_storage_key: Path) -> bytes:
+    def load_item(self, item_storage_key: ItemID) -> bytes:
         item_storage_key = self.make_absolute_item_storage_key(item_storage_key)
+        assert isinstance(item_storage_key, Path)
         if not item_storage_key.exists():
             raise FileExistsError(f"File {item_storage_key} does not exist")
         with open(item_storage_key, "rb") as f:
             return f.read()
 
     @overrides
-    def save_item(self, object: bytes, item_storage_key: Path):
+    def save_item(self, item: bytes, item_storage_key: ItemID):
         item_storage_key = self.make_absolute_item_storage_key(item_storage_key)
+        assert isinstance(item_storage_key, Path)
         if item_storage_key.exists():
             raise FileExistsError(
                 f"File {item_storage_key} already exists. Cannot silently overwrite."
             )
         with open(item_storage_key, "wb") as f:
-            f.write(object)
+            f.write(item)
 
     @property
     @overrides
@@ -55,7 +62,8 @@ class FileCacheStorage(I_CacheStorageModify):
         )
 
     @overrides
-    def make_absolute_item_storage_key(self, item_storage_key: Path) -> Path:
+    def make_absolute_item_storage_key(self, item_storage_key: ItemID) -> ItemID:
+        assert isinstance(item_storage_key, Path)
         return self._cache_root_path / item_storage_key
 
     @property
@@ -64,39 +72,47 @@ class FileCacheStorage(I_CacheStorageModify):
         return str(self._cache_root_path)
 
     @overrides
-    def calculate_hash(self, item_storage_key: Path) -> Optional[EntityHash]:
-        return EntityHash.HashDiskFile(
-            self.make_absolute_item_storage_key(item_storage_key), "sha256"
-        )
+    def calculate_hash(self, item_storage_key: ItemID) -> Optional[EntityHash]:
+        assert isinstance(item_storage_key, Path)
+        item_storage_key = self.make_absolute_item_storage_key(item_storage_key)
+        assert isinstance(item_storage_key, Path)
+        return EntityHash.HashDiskFile(item_storage_key, "sha256")
 
     @overrides
-    def does_item_exists(self, item_storage_key: Path) -> bool:
+    def does_item_exists(self, item_storage_key: ItemID) -> bool:
+        assert isinstance(item_storage_key, Path)
         item_storage_key = self.make_absolute_item_storage_key(item_storage_key)
+        assert isinstance(item_storage_key, Path)
         return item_storage_key.exists()
 
     @overrides
     def close(self):
         pass
 
+    @overrides
+    def item_size(self, item_storage_key: ItemID) -> int:
+        assert isinstance(item_storage_key, Path)
+        return item_storage_key.stat().st_size
 
-class StorageKeyGenerator_Path(BaseModel, I_StorageKeyGenerator[Path]):
+
+class StorageKeyGenerator_Path(BaseModel, I_StorageKeyGenerator):
     subfolder: Path = Path()
     file_prefix: str = ""
     file_extension: str = "bin"
     hash_len: int = 8
 
-    def generate_item_storage_key(self, item_key: EntityHash) -> Path:
+    def generate_item_storage_key(self, item_key: EntityHash) -> ItemID:
         safe_base64 = item_key.as_base64[: self.hash_len].replace("/", "_")
         return self.subfolder / f"{self.file_prefix}{safe_base64}.{self.file_extension}"
 
 
 def generate_file_cache(
     cached_dir: Path,
-    initial_config: ModelCacheManagerConfig = None,
+    initial_config: Optional[ModelCacheManagerConfig] = None,
     storage_key_generator: StorageKeyGenerator_Path = StorageKeyGenerator_Path(),
     db_filename: str | Path = ".metadata.sqlite",
     calculate_hash: bool = True,
-) -> ObjectCache[Path]:
+) -> ObjectCache:
     if isinstance(db_filename, str):
         db_filename = Path(db_filename)
     if not db_filename.is_absolute():
@@ -117,12 +133,12 @@ def generate_file_cache(
 
 
 def generate_file_cache_view(
-    file_cache: ObjectCache[Path],
+    file_cache: ObjectCache,
     subfolder: Path = Path(),
     file_prefix: str = "",
     file_extension: str = "bin",
     hash_len: int = 8,
-) -> ObjectCache[Path]:
+) -> ObjectCache:
     storage_key_generator = StorageKeyGenerator_Path(
         subfolder=subfolder,
         file_prefix=file_prefix,
@@ -130,8 +146,8 @@ def generate_file_cache_view(
         hash_len=hash_len,
     )
     cache = ObjectCache(
-        storage=file_cache._storage,
-        cache_manager=file_cache._cache_manager,
+        storage=file_cache.storage,
+        cache_manager=file_cache._cache_manager,  # pylint: disable=protected-access
         storage_key_generator=storage_key_generator,
         calculate_hash=file_cache.calculate_hash,
     )
