@@ -11,15 +11,18 @@ from typing import Any, Optional
 import numpy as np
 import pytest
 from EntityHash import calc_hash, EntityHash
+from overrides import overrides
 
 from CacheManager import (
     generate_file_cache,
-    ModelCacheManagerConfig,
     StorageKeyGenerator_Path,
     I_ItemProducer,
     ObjectCache,
     I_AbstractItemID,
+    StoredItemID,
+    ItemUtility,
 )
+from CacheManager.ifaces import I_CacheStorageModify
 
 
 class SomeHeavyResult:
@@ -33,9 +36,24 @@ class SomeHeavyResult:
 
 class SomeHeavyComputation(I_ItemProducer):
     compute_arguments: dict
+    item_serialization_performance_class: str = ""
 
-    def __init__(self, **kwargs):
+    def __init__(self, item_serialization_performance_class="", **kwargs):
         self.compute_arguments = kwargs
+        self.item_serialization_performance_class = item_serialization_performance_class
+
+    @overrides
+    def get_item_serialization_class(self) -> str:
+        return self.item_serialization_performance_class
+
+    @overrides
+    def get_files_storing_state(
+        self, storage: I_CacheStorageModify
+    ) -> dict[str, StoredItemID]:
+        return {}
+
+    def protect_item(self):
+        raise NotImplementedError
 
     # @overrides
     def get_item_key(self) -> EntityHash:
@@ -53,7 +71,10 @@ class SomeHeavyComputation(I_ItemProducer):
         return SomeHeavyResult(arg3_result_size)
 
     # @overrides
-    def instantiate_item(self, data: bytes) -> Any:
+    def instantiate_item(
+        self, data: bytes, extra_files: dict[str, StoredItemID] | None = None
+    ) -> Any:
+        assert extra_files is None
         uncompressed_data = zlib.decompress(data)
         item = pickle.loads(uncompressed_data)
         return item
@@ -80,12 +101,13 @@ def cache():
     storage_file_naming_settings = StorageKeyGenerator_Path(
         file_prefix="model_", file_extension="json"
     )
-    initial_config = ModelCacheManagerConfig()
-    initial_config.reserved_free_space = 1024 * 1024 * 1024  # 1 GB set aside
-    initial_config.cost_of_minute_compute_rel_to_cost_of_1GB = 1000
+    caching_utility = ItemUtility(
+        reserved_free_space=1024 * 1024 * 1024,
+        cost_of_minute_compute_rel_to_cost_of_1GB=1000,
+    )
     cache = generate_file_cache(
         cached_dir=Path(storage_path.name),
-        initial_config=initial_config,
+        utility_gen=caching_utility,
         storage_key_generator=storage_file_naming_settings,
         db_filename=str(db_path),
         calculate_hash=True,
@@ -115,9 +137,10 @@ def test1(cache: ObjectCache):
 
     cache.get_object(object_promise)
     cache_item = cache.get_object_info(object_promise.get_item_key())
+    assert cache_item is not None
     assert cache_item.utility > 0
     assert cache_item.exists
-    assert cache.storage.does_item_exists(cache_item.item_storage_key)
+    assert cache.storage.does_item_exists(cache_item.main_item_storage_key)
 
     mock_object_promise = SomeHeavyComputation(
         arg1_important_arg="test2",
@@ -127,6 +150,7 @@ def test1(cache: ObjectCache):
     cache.print_contents()
     cache.get_object(mock_object_promise)
     cache_item = cache.get_object_info(mock_object_promise.get_item_key())
+    assert cache_item is not None
     assert cache_item.utility < 0
-    assert not cache.storage.does_item_exists(cache_item.item_storage_key)
+    assert not cache.storage.does_item_exists(cache_item.main_item_storage_key)
     assert not cache_item.exists

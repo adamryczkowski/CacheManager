@@ -1,3 +1,4 @@
+# pyright: reportReturnType=false, reportGeneralTypeIssues=false
 import datetime as dt
 from pathlib import Path
 from typing import Optional, Any, Iterator
@@ -10,11 +11,11 @@ from pydantic import BaseModel, TypeAdapter
 
 from .abstract_cache_manager import AbstractCacheManager
 from .ifaces import (
-    ModelCacheManagerConfig,
     I_CacheStorageModify,
     I_StorageKeyGenerator,
     I_AbstractItemID,
-    ItemID,
+    StoredItemID,
+    I_UtilityOfStoredItem,
 )
 from .object_cache import ObjectCache, I_MockItemProducer
 from .sqlite_settings_manager import SQLitePersistentDB
@@ -47,7 +48,7 @@ class MockCacheStorage_Path(I_CacheStorageModify):
             yield obj
 
     @overrides
-    def remove_item(self, item_storage_key: ItemID) -> bool:
+    def remove_item(self, item_storage_key: StoredItemID) -> bool:
         if item_storage_key in self._stored_objects:
             del self._stored_objects[item_storage_key]
             return True
@@ -55,7 +56,7 @@ class MockCacheStorage_Path(I_CacheStorageModify):
             return False
 
     @overrides
-    def load_item(self, item_storage_key: ItemID) -> bytes:
+    def load_item(self, item_storage_key: StoredItemID) -> bytes:
         # We are mocking the storage by returning the key itself with appended "data" string
 
         assert item_storage_key in self._stored_objects
@@ -64,7 +65,7 @@ class MockCacheStorage_Path(I_CacheStorageModify):
         return self._stored_objects[item_storage_key]
 
     @overrides
-    def save_item(self, item: bytes, item_storage_key: ItemID):
+    def save_item(self, item: bytes, item_storage_key: StoredItemID):
         assert isinstance(item_storage_key, Path)
         assert isinstance(item, bytes)
         assert item_storage_key not in self._stored_objects
@@ -73,7 +74,7 @@ class MockCacheStorage_Path(I_CacheStorageModify):
 
     @property
     @overrides
-    def free_space(self) -> float:
+    def free_space(self) -> int:
         return self._total_space - sum(
             [len(obj) for obj in self._stored_objects.values()]
         )
@@ -84,12 +85,12 @@ class MockCacheStorage_Path(I_CacheStorageModify):
         return "Mock storage"
 
     @overrides
-    def calculate_hash(self, item_storage_key: ItemID) -> Optional[EntityHash]:
+    def calculate_hash(self, item_storage_key: StoredItemID) -> EntityHash:
         assert isinstance(item_storage_key, Path)
         return self._stored_objects[item_storage_key].hash
 
     @overrides
-    def does_item_exists(self, item_storage_key: ItemID) -> bool:
+    def does_item_exists(self, item_storage_key: StoredItemID) -> bool:
         return item_storage_key in self._stored_objects
 
     @overrides
@@ -97,11 +98,14 @@ class MockCacheStorage_Path(I_CacheStorageModify):
         pass
 
     @overrides
-    def make_absolute_item_storage_key(self, item_storage_key: ItemID) -> ItemID:
+    def make_absolute_item_storage_key(
+        self, item_storage_key: StoredItemID
+    ) -> StoredItemID:
         return item_storage_key
 
     @overrides
-    def item_size(self, item_storage_key: ItemID) -> int:
+    def item_size(self, item_storage_key: StoredItemID) -> int:
+        assert isinstance(item_storage_key, Path)
         return self._stored_objects[item_storage_key].size
 
 
@@ -117,15 +121,15 @@ class MockItemProducer(I_MockItemProducer):
     _result_size: float
 
     def __init__(
-        self, compute_time: dt.timedelta = None, result_size: float = None
+        self, compute_time: dt.timedelta | None = None, result_size: float | None = None
     ) -> None:
         if compute_time is None:
             compute_time = dt.timedelta(
-                seconds=np.random.exponential(size=1, scale=10.0)
+                seconds=float(np.random.exponential(size=1, scale=10.0))
             )
 
         if result_size is None:
-            result_size = np.random.exponential(size=1, scale=1000000.0)
+            result_size = float(np.random.exponential(size=1, scale=1000000.0))
 
         self._compute_time = compute_time
         self._result_size = result_size
@@ -145,7 +149,27 @@ class MockItemProducer(I_MockItemProducer):
         return ans
 
     @overrides
-    def instantiate_item(self, data: bytes) -> Any:
+    def get_item_serialization_class(self) -> str:
+        return "mock"
+
+    @overrides
+    def get_files_storing_state(
+        self, storage: I_CacheStorageModify
+    ) -> dict[str, StoredItemID]:
+        return {}
+
+    @overrides
+    def protect_item(self):
+        assert (
+            False
+        )  # Cannot be called, because get_files_storing_state returns empty dict
+
+    @overrides
+    def instantiate_item(
+        self, data: bytes, extra_files: dict[str, StoredItemID] | None = None
+    ) -> Any:
+        if extra_files is not None:
+            raise ValueError("This mock does not support extra files")
         ans = TypeAdapter(MockObject).validate_json(data.decode())
         assert isinstance(ans, MockObject)
         return ans
@@ -175,12 +199,12 @@ def produce_mock_result(
 def generate_mock_cache_Path(
     db_filename: Path,
     total_space: float,
-    initial_config: ModelCacheManagerConfig = None,
+    utility_gen: I_UtilityOfStoredItem,
 ) -> tuple[ObjectCache, MockCacheStorage_Path]:
-    db = SQLitePersistentDB(db_filename, initial_config=initial_config)
+    db = SQLitePersistentDB(db_filename)
     storage = MockCacheStorage_Path(total_space=total_space)
 
-    abs_cache = AbstractCacheManager(db, storage)
+    abs_cache = AbstractCacheManager(db, storage, utility_gen=utility_gen)
     storage_key_generator = MockStorageKeyGenerator_Path()
     cache = ObjectCache(
         storage=storage,

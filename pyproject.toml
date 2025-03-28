@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "CacheManager"
-version = "0.2.1"
+version = "0.2.2"
 description = "Library that manages the cache of the data that is too expensive to compute."
 authors = ["Adam Ryczkowski <adam@statystyka.net>"]
 packages = [{ include = "CacheManager"}]
@@ -13,6 +13,7 @@ EntityHash = {git = "https://github.com/adamryczkowski/EntityHash.git", rev = "m
 humanize = "^4.12.0"
 overrides = "^7.7.0"
 pylint = "^3.3.5"
+valuewitherror = {git = "https://github.com/adamryczkowski/ValueWithError.git"}
 
 [poetry.group.dev.dependencies]
 pytest = "^8.3.4"
@@ -27,6 +28,8 @@ venvPath = "."
 venv = "/home/adam/.cache/pypoetry/virtualenvs/cachemanager-iWnPA1xQ-py3.12"
 pythonVersion = "3.12"
 pythonPlatform = "Linux"
+reportMissingImports = "error"
+reportInvalidTypeForm = false
 
 [tool.pylint.main]
 disable = ["invalid-name", "bad-inline-option", "consider-using-augmented-assign", "deprecated-pragma", "file-ignored", "locally-disabled", "prefer-typing-namedtuple", "raw-checker-failed", "suppressed-message", "use-implicit-booleaness-not-comparison-to-string", "use-implicit-booleaness-not-comparison-to-zero", "use-symbolic-message-instead", "useless-suppression"]

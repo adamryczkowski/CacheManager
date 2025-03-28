@@ -4,10 +4,11 @@ from EntityHash import EntityHash
 
 from CacheManager import (
     generate_file_cache,
-    ModelCacheManagerConfig,
     StorageKeyGenerator_Path,
     I_ItemProducer,
     I_AbstractItemID,
+    StoredItemID,
+    ItemUtility,
 )
 from pathlib import Path
 import datetime as dt
@@ -18,6 +19,8 @@ from overrides import overrides
 import random
 import time
 import pytest
+
+from CacheManager.ifaces import I_CacheStorageModify
 
 
 def bytes_array(arr_length: int) -> bytes:
@@ -32,8 +35,8 @@ class ItemPromise(I_ItemProducer):
     def __init__(
         self,
         item_key: EntityHash,
-        compute_time: dt.timedelta = None,
-        result_size: float = None,
+        compute_time: dt.timedelta,
+        result_size: float,
     ) -> None:
         assert isinstance(compute_time, dt.timedelta)
         assert isinstance(result_size, float | int)
@@ -48,12 +51,29 @@ class ItemPromise(I_ItemProducer):
         return self.item_key
 
     @overrides
+    def get_item_serialization_class(self) -> str:
+        return ""
+
+    @overrides
+    def get_files_storing_state(
+        self, storage: I_CacheStorageModify
+    ) -> dict[str, StoredItemID]:
+        return {}
+
+    @overrides
+    def protect_item(self):
+        raise NotImplementedError()
+
+    @overrides
     def compute_item(self) -> Any:
         time.sleep(self.compute_time.total_seconds())
         return f"Computed item of size {int(self.result_size)} bytes"
 
     @overrides
-    def instantiate_item(self, data: bytes) -> Any:
+    def instantiate_item(
+        self, data: bytes, extra_files: dict[str, StoredItemID] | None = None
+    ) -> Any:
+        assert extra_files is None
         return f"Computed item of size {len(data)} bytes"
 
     @overrides
@@ -87,11 +107,12 @@ def cache():
         db_path.unlink()
 
     storage_file_naming_settings = StorageKeyGenerator_Path(file_prefix="model_")
-    initial_config = ModelCacheManagerConfig()
-    initial_config.reserved_free_space = 1024 * 1024 * 1024  # 1 GB set aside
+    utility_gen = ItemUtility(
+        reserved_free_space=1024 * 1024 * 1024,
+    )
     cache = generate_file_cache(
         cached_dir=Path(storage_path.name),
-        initial_config=initial_config,
+        utility_gen=utility_gen,
         storage_key_generator=storage_file_naming_settings,
         db_filename=str(db_path),
         calculate_hash=True,

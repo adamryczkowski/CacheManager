@@ -11,9 +11,10 @@ from .ifaces import (
     DC_CacheItem,
     I_CacheStorageRead,
     I_StorageKeyGenerator,
-    ModelCacheManagerConfig,
     I_PersistentDB,
     ModelCacheOptionName,
+    StoredItemID,
+    I_UtilityOfStoredItem,
 )
 from .mock_cache import (
     generate_mock_cache_Path,
@@ -21,11 +22,13 @@ from .mock_cache import (
     MockItemProducer,
     produce_mock_result,
 )
-from .object_cache import ObjectCache, I_ItemProducer, CacheItem  # , ItemProducer
+from .object_cache import ObjectCache, I_ItemProducer  # , ItemProducer
+from .abstract_cache_manager import CacheItem
 from .pretty_path import shorten_path
 from .serialization_json import I_JSONItemPromise, json_wrap_promise
 from .serialization_pickle import I_PickledItemPromise, pickle_wrap_promise
 from .sqlite_settings_manager import SQLitePersistentDB
+from .item_utility import ItemUtility
 
 __all__ = [
     "shorten_path",
@@ -33,7 +36,6 @@ __all__ = [
     "DC_CacheItem",
     "I_CacheStorageRead",
     "I_StorageKeyGenerator",
-    "ModelCacheManagerConfig",
     "I_PersistentDB",
     "ModelCacheOptionName",
     "SQLitePersistentDB",
@@ -54,4 +56,7 @@ __all__ = [
     "calc_hash",
     "EntityHash",
     "CacheItem",
+    "StoredItemID",
+    "I_UtilityOfStoredItem",
+    "ItemUtility",
 ]

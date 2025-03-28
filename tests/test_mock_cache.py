@@ -1,6 +1,6 @@
 from CacheManager import (
     generate_mock_cache_Path,
-    ModelCacheManagerConfig,
+    ItemUtility,
     produce_mock_result,
 )
 from pathlib import Path
@@ -18,10 +18,8 @@ def test1():
     if db_path.exists():
         db_path.unlink()
 
-    initial_config = ModelCacheManagerConfig()
-    cache, storage = generate_mock_cache_Path(
-        db_path, 10**8, initial_config=initial_config
-    )
+    utility_gen = ItemUtility()
+    cache, storage = generate_mock_cache_Path(db_path, 10**8, utility_gen=utility_gen)
     assert cache.free_space == 10**8
 
     mock_object_promise = produce_mock_result(
@@ -29,9 +27,10 @@ def test1():
     )
     cache.get_object(mock_object_promise)
     cache_item = cache.get_object_info(mock_object_promise.get_item_key())
+    assert cache_item is not None
     assert cache_item.utility > 0
     assert cache_item.exists
-    assert storage.does_item_exists(cache_item.item_storage_key)
+    assert storage.does_item_exists(cache_item.main_item_storage_key)
 
     mock_object_promise = produce_mock_result(
         compute_time=dt.timedelta(seconds=0), result_size=500 * 1024 * 1024 * 1024
@@ -39,8 +38,9 @@ def test1():
     cache.print_contents()
     cache.get_object(mock_object_promise)
     cache_item = cache.get_object_info(mock_object_promise.get_item_key())
+    assert cache_item is not None
     assert cache_item.utility < 0
-    assert not storage.does_item_exists(cache_item.item_storage_key)
+    assert not storage.does_item_exists(cache_item.main_item_storage_key)
     assert not cache_item.exists
 
     cache.close()
@@ -52,10 +52,8 @@ def test2():
 
     if db_path.exists():
         db_path.unlink()
-    initial_config = ModelCacheManagerConfig()
-    cache, storage = generate_mock_cache_Path(
-        db_path, 10**8, initial_config=initial_config
-    )
+    utility_gen = ItemUtility()
+    cache, storage = generate_mock_cache_Path(db_path, 10**8, utility_gen=utility_gen)
 
     # Set seed=123
     np.random.seed(123)
@@ -74,6 +72,7 @@ def test2():
         if item is None:
             cache.get_object(object_promise, verbose=True)
             item = cache.get_object_info(object_promise.get_item_key())
+            assert item is not None
             print(repr(cache))
             if item.exists:
                 item_was_stored = True
@@ -87,6 +86,7 @@ def test2():
     for item in storage.stored_objects:
         item_key = item.hash
         cached_item = cache.get_object_info(item_key)
+        assert cached_item is not None
         print(
             f"Object of size {cached_item.pretty_size} and time {cached_item.pretty_compute_time}"
         )

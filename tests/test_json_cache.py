@@ -6,15 +6,14 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 import pytest
-from EntityHash import calc_hash
 from pydantic import BaseModel, ConfigDict
 
 from CacheManager import (
     generate_file_cache,
-    ModelCacheManagerConfig,
     StorageKeyGenerator_Path,
     json_wrap_promise,
     I_ItemProducer,
+    ItemUtility,
 )
 import time
 
@@ -46,10 +45,9 @@ def wrapped_heavy_computation(
         "arg2_compute_time": arg2_compute_time,
         "arg3_result_size": arg3_result_size,
     }
-    item_key = calc_hash(kwargs)
     # noinspection PyTypeChecker
     return json_wrap_promise(
-        item_key, SomeHeavyResult, _producer=some_heavy_computation, **kwargs
+        item_type=SomeHeavyResult, producer=some_heavy_computation, **kwargs
     )
 
 
@@ -64,12 +62,13 @@ def cache():
     storage_file_naming_settings = StorageKeyGenerator_Path(
         file_prefix="model_", file_extension="json"
     )
-    initial_config = ModelCacheManagerConfig()
-    initial_config.reserved_free_space = 1024 * 1024 * 1024  # 1 GB set aside
-    initial_config.cost_of_minute_compute_rel_to_cost_of_1GB = 1000
+    utility_gen = ItemUtility(
+        reserved_free_space=1024 * 1024 * 1024,
+        cost_of_minute_compute_rel_to_cost_of_1GB=1000,
+    )
     cache = generate_file_cache(
         cached_dir=Path(storage_path.name),
-        initial_config=initial_config,
+        utility_gen=utility_gen,
         storage_key_generator=storage_file_naming_settings,
         db_filename=str(db_path),
         calculate_hash=True,

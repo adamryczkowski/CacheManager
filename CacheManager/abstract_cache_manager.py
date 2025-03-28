@@ -2,18 +2,18 @@ from __future__ import annotations
 
 import datetime as dt
 import heapq
-from typing import Iterator, Optional
+from collections.abc import Iterator
 
 from EntityHash import EntityHash
 from pydantic import PositiveFloat
 
 from .ifaces import (
-    ModelCacheManagerConfig,
     I_PersistentDB,
     I_CacheStorageRead,
     DC_CacheItem,
     DC_StoredItem,
-    ItemID,
+    StoredItemID,
+    I_UtilityOfStoredItem,
 )
 
 
@@ -24,17 +24,22 @@ class CacheItem(DC_CacheItem):
         self,
         *,
         item_key: EntityHash,
+        main_item_storage_key: StoredItemID,
         compute_time: dt.timedelta,
         weight: PositiveFloat,
-        stored_items: dict[ItemID, DC_StoredItem],
+        stored_items: dict[StoredItemID, DC_StoredItem],
         cache_manager: AbstractCacheManager,
+        serialization_performance_class: str,
     ):
         assert isinstance(cache_manager, AbstractCacheManager)
+        assert main_item_storage_key in stored_items
         super().__init__(
             item_key=item_key,
+            main_item_storage_key=main_item_storage_key,
             compute_time=compute_time,
             weight=weight,
             stored_items=stored_items,
+            serialization_performance_class=serialization_performance_class,
         )
         self._cache_manager = cache_manager
 
@@ -65,7 +70,7 @@ class CacheItem(DC_CacheItem):
 
     @property
     def exists(self) -> bool:
-        key: ItemID
+        key: StoredItemID
         for key in self.stored_items.keys():
             if not self._cache_manager.storage.does_item_exists(key):
                 return False
@@ -88,7 +93,7 @@ class CacheItem(DC_CacheItem):
         return self._cache_manager.metadata_database.get_accesses(self.item_key)
 
     @property
-    def last_access_time(self) -> Optional[dt.datetime]:
+    def last_access_time(self) -> dt.datetime | None:
         return self._cache_manager.metadata_database.get_last_access(self.item_key)
 
 
@@ -113,15 +118,27 @@ class AbstractCacheManager:
 
     _db: I_PersistentDB
     _storage: I_CacheStorageRead
+    _utility_gen: I_UtilityOfStoredItem
 
-    def __init__(self, db: I_PersistentDB, storage: I_CacheStorageRead):
+    def __init__(
+        self,
+        db: I_PersistentDB,
+        storage: I_CacheStorageRead,
+        utility_gen: I_UtilityOfStoredItem,
+    ):
         assert db is not None
         assert isinstance(db, I_PersistentDB)
         assert storage is not None
         assert isinstance(storage, I_CacheStorageRead)
+        assert isinstance(utility_gen, I_UtilityOfStoredItem)
 
         self._db = db
         self._storage = storage
+        self._utility_gen = utility_gen
+
+    @property
+    def utility_gen(self) -> I_UtilityOfStoredItem:
+        return self._utility_gen
 
     @property
     def metadata_database(self) -> I_PersistentDB:
@@ -133,77 +150,8 @@ class AbstractCacheManager:
         return self._storage.free_space
 
     @property
-    def config(self) -> ModelCacheManagerConfig:
-        return self._db.config
-
-    @property
     def storage(self) -> I_CacheStorageRead:
         return self._storage
-
-    def _calculate_disk_cost_of_new_item(
-        self, size: float, existing: bool = False
-    ) -> float:
-        """
-        Calculate the cost of storing the object in the cache.
-        """
-        size /= 1024 * 1024 * 1024  # Convert to GB
-        free_space = self.free_space - self.config.reserved_free_space
-        free_space /= 1024 * 1024 * 1024  # Convert to GB
-        if existing:
-            if free_space < 0:
-                return -float("inf")
-            utility_before = self._calculate_utility_of_free_space(free_space + size)
-            utility_after = self._calculate_utility_of_free_space(free_space)
-        else:
-            if free_space < size:
-                return -float("inf")
-            utility_before = self._calculate_utility_of_free_space(free_space)
-            utility_after = self._calculate_utility_of_free_space(free_space - size)
-        return utility_before - utility_after
-
-    def _calculate_utility_of_free_space(self, free_space: float) -> float:
-        """
-        Calculate the utility of the free space (measured in GB).
-        """
-        return self.config.utility_of_1GB_free_space * free_space ** (
-            -self.config.marginal_relative_utility_at_1GB
-        )
-
-    def _calculate_decay_weight(self, age: float) -> float:
-        """
-        Calculate the weight of the object based on the age of the object in hours.
-        """
-        return 2 ** (-age / self.config.half_life_of_cache)
-
-    def calculate_net_utility_of_item(
-        self, item: DC_CacheItem, existing: bool = False
-    ) -> float:
-        """
-        :param item: item to calculate utility for
-        :param existing: True - calculate utility in the context of prunning. False - calculate utility in the context of storing new item.
-        Calculate the net utility of storing the object in the cache.
-        Size is in GB, time in minutes.
-        If the utility is negative, the object should not be stored in the cache.
-
-        If item does not exist, it would make sense to estimate the expected utility of the decay.
-        """
-        last_access_time = self._db.get_last_access(item.item_key)
-        if last_access_time is None:
-            last_access_time = dt.datetime.now()
-        item_age = (dt.datetime.now() - last_access_time).total_seconds() / 60.0
-
-        positive_utility = (
-            item.compute_time.total_seconds()
-            / 60
-            / self.config.cost_of_minute_compute_rel_to_cost_of_1GB
-            * item.weight
-            * self._calculate_decay_weight(item_age)
-        )
-        negative_cost = self._calculate_disk_cost_of_new_item(
-            item.filesize, existing=existing
-        )
-        utility = positive_utility + negative_cost
-        return utility
 
     def iterate_cache_items(self, OnlyExisting: bool = True) -> Iterator[CacheItem]:
         for db_item in self._db.iterate_items():
@@ -256,7 +204,9 @@ class AbstractCacheManager:
             item_key=old_item.item_key,
             stored_items=old_item.stored_items,
             compute_time=compute_time,
+            main_item_storage_key=old_item.main_item_storage_key,
             weight=weight,
+            serialization_performance_class=old_item.serialization_performance_class,
         )
         self._db.add_item(item)
         self._db.add_access_to_item(item.item_key, dt.datetime.now())
@@ -294,11 +244,13 @@ class AbstractCacheManager:
             stored_items=item.stored_items,
             compute_time=item.compute_time,
             weight=item.weight,
+            main_item_storage_key=item.main_item_storage_key,
             cache_manager=self,
+            serialization_performance_class=item.serialization_performance_class,
         )
         return ans_item
 
-    def get_item_by_key(self, item_key: EntityHash) -> Optional[CacheItem]:
+    def get_item_by_key(self, item_key: EntityHash) -> CacheItem | None:
         item = self._db.get_item_by_key(item_key)
         if item is None:
             return None
@@ -311,18 +263,32 @@ class AbstractCacheManager:
         self,
         *,
         item_key: EntityHash,
+        main_item_storage_key: StoredItemID,
         compute_time: dt.timedelta,
         weight: PositiveFloat,
-        stored_items: dict[ItemID, DC_StoredItem],
+        stored_items: dict[StoredItemID, DC_StoredItem],
+        serialization_performance_class: str,
     ) -> CacheItem:
         return CacheItem(
             cache_manager=self,
             item_key=item_key,
+            main_item_storage_key=main_item_storage_key,
             stored_items=stored_items,
             compute_time=compute_time,
             weight=weight,
+            serialization_performance_class=serialization_performance_class,
         )
 
     def close(self):
         self._db.close()
         self._storage.close()
+
+    def calculate_net_utility_of_item(self, item: DC_CacheItem, exists: bool) -> float:
+        last_access_time = self._db.get_last_access(item.item_key)
+        return self._utility_gen.utility(
+            item,
+            self._storage.free_space,
+            self._db,
+            existing=exists,
+            last_access_time=last_access_time,
+        )

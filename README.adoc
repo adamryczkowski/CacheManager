@@ -144,7 +144,7 @@ def wrapped_heavy_computation(
     }
     item_key = calc_hash(kwargs)
     return json_wrap_promise(
-        item_key, SomeHeavyResult, _producer=some_heavy_computation, **kwargs
+        item_key, SomeHeavyResult, producer=some_heavy_computation, **kwargs
     )
 
 

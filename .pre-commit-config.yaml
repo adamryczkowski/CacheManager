@@ -84,6 +84,10 @@ repos:
           - high
           - --confidence-level
           - medium
+#  - repo: https://github.com/DetachHead/basedpyright-pre-commit-mirror
+#    rev: v1.13.0  # or whatever the latest version is at the time
+#    hooks:
+#      - id: basedpyright
   - repo: https://github.com/RobertCraigie/pyright-python
     rev: v1.1.396
     hooks:

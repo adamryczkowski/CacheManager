@@ -6,20 +6,27 @@ from builtins import issubclass
 from pathlib import Path
 from typing import Optional, Iterator
 
+import numpy as np
 from EntityHash import EntityHash
+from ValueWithError import ValueWithError, make_ValueWithError_from_vector
 from overrides import overrides
-from pip._internal.utils.filesystem import file_size
+from pydantic import BaseModel
 
 from .ifaces import (
-    ModelCacheManagerConfig,
     I_PersistentDB,
     DC_CacheItem,
     DC_StoredItem,
-    ItemID,
+    StoredItemID,
+    I_SerializationPerformanceModel,
+    I_AbstractItemID,
 )
 
 
-# from .cache_item import CacheItem
+class SerializationPerformance(BaseModel, I_SerializationPerformanceModel):
+    serialization_time: ValueWithError  # pyright: ignore [reportIncompatibleMethodOverride]
+    deserialization_time: ValueWithError  # pyright: ignore [reportIncompatibleMethodOverride]
+    model_age: dt.datetime  # pyright: ignore [reportIncompatibleMethodOverride]
+    sample_count: int  # pyright: ignore [reportIncompatibleMethodOverride]
 
 
 class SQLitePersistentDB(I_PersistentDB):
@@ -42,19 +49,16 @@ class SQLitePersistentDB(I_PersistentDB):
 
     database_path: Path
     connection: sqlite3.Connection
-    itemID_type: type[ItemID]
+    itemID_type: type[StoredItemID]
 
     def __init__(
         self,
         database_path: Path,
-        initial_config: ModelCacheManagerConfig = None,
-        itemID_type: type[ItemID] = Path,
+        itemID_type: type[StoredItemID] = Path,
     ):
         self.database_path = database_path
         self._make_sure_db_exists()
-        if initial_config is None:
-            initial_config = ModelCacheManagerConfig()
-        self._ensure_tables(initial_config)
+        self._ensure_tables()
         self.itemID_type = itemID_type
 
     def _make_sure_db_exists(self):
@@ -72,27 +76,30 @@ class SQLitePersistentDB(I_PersistentDB):
     def __del__(self):
         self.connection.close()
 
-    def _ensure_tables(self, initial_config: ModelCacheManagerConfig = None):
+    def _ensure_tables(self):
         self.connection.execute("""
         CREATE TABLE IF NOT EXISTS Objects (
             item_key TEXT PRIMARY KEY,
             compute_time REAL,
-            weight REAL
+            main_item_storage_key TEXT,
+            weight REAL,
+            serialization_class TEXT
         )
         """)
         self.connection.execute(
-            "CREATE INDEX IF NOT EXISTS idx_filename ON Objects (hash)"
+            "CREATE INDEX IF NOT EXISTS idx_main_item_storage_key ON Objects (main_item_storage_key)"
         )
         self.connection.execute("""
         CREATE TABLE IF NOT EXISTS StoredItems (
             item_storage_key TEXT PRIMARY KEY,
+            tag VARCHAR(32),
             item_key TEXT,
             hash TEXT,
             filesize REAL
         )
         """)
         self.connection.execute(
-            "CREATE INDEX IF NOT EXISTS item_key ON Objects (item_key, tag)"
+            "CREATE INDEX IF NOT EXISTS item_key ON StoredItems (item_key, tag)"
         )
         self.connection.execute("""
         CREATE TABLE IF NOT EXISTS Accesses (
@@ -106,65 +113,148 @@ class SQLitePersistentDB(I_PersistentDB):
             "CREATE INDEX IF NOT EXISTS idx_Accesses_timestamp ON Accesses (timestamp)"
         )
 
-        # Check if Settings table exists:
-        populate_settings = (
-            self.connection.execute(
-                "SELECT name FROM sqlite_master WHERE type='table' AND name='Settings'"
-            ).fetchone()
-            is None
-        )
-
-        if not populate_settings:
-            populate_settings = (
-                self.connection.execute("SELECT key FROM Settings").fetchone() is None
-            )
-
         self.connection.execute("""
-        CREATE TABLE IF NOT EXISTS Settings (
-            key TEXT PRIMARY KEY,
-            value TEXT
-        )
+        CREATE TABLE IF NOT EXISTS SerializationStats (
+            serialization_class VARCHAR(32),
+            timestamp REAL,
+            serialization_time REAL,
+            deserialization_time REAL,
+            serialized_size REAL,
+            deserialized_size REAL,
+            PRIMARY KEY (serialization_class, timestamp))
         """)
-        if populate_settings:
-            self.store_config(initial_config, table_init=True)
+
+        # # Check if Settings table exists:
+        # populate_settings = (
+        #     self.connection.execute(
+        #         "SELECT name FROM sqlite_master WHERE type='table' AND name='Settings'"
+        #     ).fetchone()
+        #     is None
+        # )
+        #
+        # if not populate_settings:
+        #     populate_settings = (
+        #         self.connection.execute("SELECT key FROM Settings").fetchone() is None
+        #     )
+        #
+        # self.connection.execute("""
+        # CREATE TABLE IF NOT EXISTS Settings (
+        #     key TEXT PRIMARY KEY,
+        #     value TEXT
+        # )
+        # """)
+        # if populate_settings:
+        #     self.store_config(initial_config, table_init=True)
         self.connection.commit()
 
-    def _put_settings(self, settings: dict[str, str]):
-        for key, value in settings.items():
-            self.connection.execute(
-                "UPDATE Settings SET value = ? WHERE key = ?", (value, key)
-            )
-
-    def _new_settings(self, settings: dict[str, str]):
-        for key, value in settings.items():
-            self.connection.execute(
-                "INSERT INTO Settings (key, value) VALUES (?, ?)", (key, value)
-            )
-
-    def _get_settings(self) -> dict[str, str]:
-        cursor = self.connection.execute("SELECT key, value FROM Settings")
-        return dict(cursor.fetchall())
+    # def _put_settings(self, settings: dict[str, str]):
+    #     for key, value in settings.items():
+    #         self.connection.execute(
+    #             "UPDATE Settings SET value = ? WHERE key = ?", (value, key)
+    #         )
+    #
+    # def _new_settings(self, settings: dict[str, str]):
+    #     for key, value in settings.items():
+    #         self.connection.execute(
+    #             "INSERT INTO Settings (key, value) VALUES (?, ?)", (key, value)
+    #         )
 
     @overrides
-    def add_item(self, item: DC_CacheItem):
+    def add_serialization_time(
+        self,
+        serialization_class: str,
+        serialization_time: dt.timedelta,
+        deserialization_time: dt.timedelta,
+        serialized_size: int,
+        object_size: int | None = None,
+    ):
+        if object_size is None:
+            object_size = serialized_size
         self.connection.execute(
-            "INSERT INTO Objects (item_key,compute_time, weight) VALUES (?, ?, ?)",
+            "INSERT INTO SerializationStats (serialization_class, timestamp, serialization_time, deserialization_time, serialized_size, deserialized_size) VALUES (?, ?, ?, ?, ?, ?)",
             (
-                item.item_key.as_base64,
-                item.compute_time.total_seconds(),
-                item.weight,
+                serialization_class,
+                dt.datetime.now().timestamp(),
+                serialization_time.total_seconds(),
+                deserialization_time.total_seconds(),
+                serialized_size,
+                object_size,
             ),
         )
 
-        for stored_item in item.stored_items.values():
-            if issubclass(self.itemID_type, Path):
-                item_storage_key_str = str(stored_item.item_store_key)
+    @overrides
+    def get_serialization_statistics(
+        self,
+        serialization_class: str,
+        last_n: int | None = None,
+        min_size: int | None = None,
+        max_size: int | None = None,
+        min_time: dt.timedelta | None = None,
+    ) -> I_SerializationPerformanceModel:
+        cursor = self.connection.execute(
+            "SELECT serialization_time, deserialization_time, serialized_size, deserialized_size, timestamp FROM SerializationStats WHERE serialization_class=?",
+            (serialization_class,),
+        )
+        last_timestamp: dt.datetime = dt.datetime.now()
+        deserialization_times_arr: list[float] = []
+        serialization_times_arr: list[float] = []
+        for rec in cursor.fetchall():
+            (
+                serialization_time,
+                deserialization_time,
+                serialized_size,
+                deserialized_size,
+                timestamp,
+            ) = rec
+            if last_timestamp > timestamp:
+                last_timestamp = timestamp
+            deserialization_times_arr.append(deserialization_time)
+            serialization_times_arr.append(serialization_time)
+
+        return SerializationPerformance(
+            serialization_time=make_ValueWithError_from_vector(
+                np.asarray(serialization_times_arr)
+            ).get_ValueWithError(),
+            deserialization_time=make_ValueWithError_from_vector(
+                np.asarray(deserialization_times_arr)
+            ).get_ValueWithError(),
+            model_age=last_timestamp,
+            sample_count=len(serialization_times_arr),
+        )
+
+    # def _get_settings(self) -> dict[str, str]:
+    #     cursor = self.connection.execute("SELECT key, value FROM Settings")
+    #     return dict(cursor.fetchall())
+
+    @overrides
+    def add_item(self, item: DC_CacheItem):
+        if isinstance(main_item_storage_key := item.main_item_storage_key, Path):
+            main_item_storage_key = str(main_item_storage_key)
+        else:
+            main_item_storage_key = main_item_storage_key.serialize()
+
+        self.connection.execute(
+            "INSERT INTO Objects (item_key, main_item_storage_key, compute_time, weight, serialization_class) VALUES (?, ?, ?, ?, ?)",
+            (
+                item.item_key.as_base64,
+                main_item_storage_key,
+                item.compute_time.total_seconds(),
+                item.weight,
+                item.serialization_performance_class,
+            ),
+        )
+
+        for stored_item_key, stored_item in item.stored_items.items():
+            if isinstance(stored_item_key, Path):
+                item_storage_key_str = str(stored_item_key)
             else:
-                item_storage_key_str = stored_item.item_store_key.serialize()
+                assert isinstance(stored_item_key, I_AbstractItemID)
+                item_storage_key_str = stored_item_key.serialize()
             self.connection.execute(
-                "INSERT INTO StoredItems (item_key, item_storage_key, hash, filesize) VALUES (?, ?, ?, ?)",
+                "INSERT INTO StoredItems (item_key, tag, item_storage_key, hash, filesize) VALUES (?, ?, ?, ?, ?)",
                 (
                     item.item_key.as_base64,
+                    stored_item.tag,
                     item_storage_key_str,
                     stored_item.hash.as_base64,
                     stored_item.filesize,
@@ -172,22 +262,28 @@ class SQLitePersistentDB(I_PersistentDB):
             )
 
     @overrides
-    def get_stored_items(self, item_key: EntityHash) -> dict[ItemID, DC_StoredItem]:
+    def get_stored_items(
+        self, item_key: EntityHash
+    ) -> dict[StoredItemID, DC_StoredItem]:
         cursor = self.connection.execute(
-            "SELECT item_storage_key, hash, filesize FROM StoredItems WHERE item_key=?",
+            "SELECT item_storage_key, hash, filesize, tag FROM StoredItems WHERE item_key=?",
             (item_key.as_base64,),
         )
         ans = {}
         for row in cursor.fetchall():
-            item_storage_key_str, hash, filesize = row
+            item_storage_key_str, hash_str, filesize, tag = row
             if issubclass(self.itemID_type, Path):
-                item_storage_key: ItemID = Path(item_storage_key_str)
+                item_storage_key: StoredItemID = Path(item_storage_key_str)
             else:
-                item_storage_key: ItemID = self.itemID_type.Unserialize(
+                item_storage_key: StoredItemID = self.itemID_type.Unserialize(
                     item_storage_key_str
                 )
+            hash_obj = EntityHash.FromBase64(hash_str)
             item = DC_StoredItem(
-                filesize=file_size, item_store_key=item_storage_key, hash=hash
+                filesize=filesize,
+                item_store_key=item_storage_key,
+                hash=hash_obj,
+                tag=tag,
             )
 
             ans[item_storage_key] = item
@@ -197,13 +293,15 @@ class SQLitePersistentDB(I_PersistentDB):
     @overrides
     def get_item_by_key(self, item_key: EntityHash) -> Optional[DC_CacheItem]:
         cursor = self.connection.execute(
-            "SELECT compute_time, weight FROM Objects WHERE item_key=?",
+            "SELECT compute_time, weight,main_item_storage_key, serialization_class FROM Objects WHERE item_key=?",
             (item_key.as_base64,),
         )
         row = cursor.fetchone()
         if row is None:
             return None
-        compute_time, weight = row
+        compute_time, weight, main_item_storage_key, serialization_performance_class = (
+            row
+        )
 
         stored_items = self.get_stored_items(item_key)
 
@@ -212,10 +310,14 @@ class SQLitePersistentDB(I_PersistentDB):
             stored_items=stored_items,
             compute_time=dt.timedelta(seconds=compute_time),
             weight=weight,
+            main_item_storage_key=main_item_storage_key,
+            serialization_performance_class=serialization_performance_class,
         )
 
     @overrides
-    def get_item_by_storage_key(self, storage_key: ItemID) -> Optional[DC_CacheItem]:
+    def get_item_by_storage_key(
+        self, storage_key: StoredItemID
+    ) -> Optional[DC_CacheItem]:
         assert storage_key is self.itemID_type
         if isinstance(storage_key, Path):
             filename_str = str(storage_key)
@@ -258,7 +360,7 @@ class SQLitePersistentDB(I_PersistentDB):
             return dt.datetime.fromtimestamp(row[0])
 
     @overrides
-    def remove_item(self, item_key: EntityHash, remove_history: bool = True) -> True:
+    def remove_item(self, item_key: EntityHash, remove_history: bool = True) -> bool:
         self.connection.execute(
             "DELETE FROM Objects WHERE item_key=?", (item_key.as_base64,)
         )
@@ -277,54 +379,26 @@ class SQLitePersistentDB(I_PersistentDB):
     def commit(self):
         self.connection.commit()
 
-    @property
-    @overrides
-    def config(self) -> ModelCacheManagerConfig:
-        settings = self._get_settings()
-        return ModelCacheManagerConfig(
-            cost_of_minute_compute_rel_to_cost_of_1GB=float(
-                settings.get("cost_of_minute_compute_rel_to_cost_of_1GB", 10.0)
-            ),
-            reserved_free_space=float(settings.get("reserved_free_space", 1.0)),
-            half_life_of_cache=float(settings.get("half_life_of_cache", 24.0)),
-            utility_of_1GB_free_space=float(
-                settings.get("utility_of_1GB_free_space", 2.0)
-            ),
-            marginal_relative_utility_at_1GB=float(
-                settings.get("marginal_relative_utility_at_1GB", 1.0)
-            ),
-        )
-
-    @overrides
-    def store_config(self, options: ModelCacheManagerConfig, table_init: bool = False):
-        settings_dict = {
-            "cost_of_minute_compute_rel_to_cost_of_1GB": str(
-                options.cost_of_minute_compute_rel_to_cost_of_1GB
-            ),
-            "reserved_free_space": str(options.reserved_free_space),
-            "half_life_of_cache": str(options.half_life_of_cache),
-            "utility_of_1GB_free_space": str(options.utility_of_1GB_free_space),
-            "marginal_relative_utility_at_1GB": str(
-                options.marginal_relative_utility_at_1GB
-            ),
-        }
-        if table_init:
-            self._new_settings(settings_dict)
-        else:
-            self._put_settings(settings_dict)
-
     @overrides
     def iterate_items(self) -> Iterator[DC_CacheItem]:
         cursor = self.connection.execute(
-            "SELECT item_key, compute_time, weight FROM Objects"
+            "SELECT item_key, compute_time, weight, main_item_storage_key, serialization_class FROM Objects"
         )
-        for item_key, compute_time, weight in cursor:
+        for (
+            item_key,
+            compute_time,
+            weight,
+            main_item_storage_key,
+            serialization_performance_class,
+        ) in cursor:
             item_key = EntityHash.FromBase64(item_key)
             ans = DC_CacheItem(
                 item_key=item_key,
                 compute_time=dt.timedelta(seconds=compute_time),
                 weight=weight,
                 stored_items=self.get_stored_items(item_key),
+                main_item_storage_key=main_item_storage_key,
+                serialization_performance_class=serialization_performance_class,
             )
             yield ans
 
@@ -341,17 +415,21 @@ class SQLitePersistentDB(I_PersistentDB):
             self.connection.close()
 
     @overrides
-    def add_file_to_item(self, item_key: EntityHash, storage_key: ItemID):
+    def add_file_to_item(
+        self,
+        item_key: EntityHash,
+        storage_key: StoredItemID,
+        tag: str,
+        item_hash: EntityHash,
+        filesize: int,
+    ):
         # Adds item to the StoredItems table
-        assert item_key is not None
-        assert storage_key is not None
-
         if isinstance(storage_key, Path):
-            storage_key = str(storage_key)
+            storage_key_str = str(storage_key)
         else:
-            storage_key = storage_key.serialize()
+            storage_key_str = storage_key.serialize()
 
         self.connection.execute(
-            "INSERT INTO StoredItems (item_key, item_storage_key) VALUES (?, ?)",
-            (item_key.as_base64, storage_key),
+            "INSERT INTO StoredItems (item_storage_key, tag, item_key, hash, filesize) VALUES (?, ?, ?, ?, ?)",
+            (storage_key_str, tag, item_key.as_base64, hash, filesize),
         )
